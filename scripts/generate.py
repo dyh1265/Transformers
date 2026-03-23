@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+"""Generate text from a trained nano-llm checkpoint."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+# Add src to path for standalone execution
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+from nano_llm.inference import generate as gen_fn
+from nano_llm.inference import load_model_and_tokenizer
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Generate text from nano-llm checkpoint")
+    parser.add_argument(
+        "--checkpoint",
+        type=Path,
+        default=Path("checkpoints/best.pt"),
+        help="Path to checkpoint",
+    )
+    parser.add_argument(
+        "--prompt",
+        type=str,
+        default="ROMEO:",
+        help="Starting prompt",
+    )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=100,
+        help="Maximum new tokens to generate",
+    )
+    parser.add_argument(
+        "--method",
+        choices=["greedy", "top_k", "top_p"],
+        default="greedy",
+        help="Sampling method",
+    )
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=40,
+        help="Top-k for top_k sampling",
+    )
+    parser.add_argument(
+        "--top-p",
+        type=float,
+        default=0.9,
+        help="Top-p (nucleus) for top_p sampling",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=1.0,
+        help="Temperature for sampling",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="Device (cuda/cpu). Default: auto",
+    )
+    parser.add_argument(
+        "--no-stop-newline",
+        action="store_true",
+        help="Do not stop generation at newline",
+    )
+    parser.add_argument(
+        "--max-context",
+        type=int,
+        default=None,
+        help="Max context length (default: from checkpoint seq_len)",
+    )
+    args = parser.parse_args()
+
+    if not args.checkpoint.exists():
+        print(f"Checkpoint not found: {args.checkpoint}", file=sys.stderr)
+        return 1
+
+    model, tokenizer, config = load_model_and_tokenizer(
+        args.checkpoint,
+        device=args.device or ("cuda" if __import__("torch").cuda.is_available() else "cpu"),
+    )
+    max_context = args.max_context if args.max_context is not None else int(config.get("seq_len", 128))
+
+    out = gen_fn(
+        model,
+        tokenizer,
+        prompt=args.prompt,
+        max_new_tokens=args.max_tokens,
+        max_context=max_context,
+        method=args.method,
+        top_k=args.top_k,
+        top_p=args.top_p,
+        temperature=args.temperature,
+        seed=args.seed,
+        stop_at_newline=not args.no_stop_newline,
+    )
+    print(out)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Exception as e:
+        import traceback
+
+        traceback.print_exc()
+        sys.exit(1)

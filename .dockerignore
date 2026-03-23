@@ -1,0 +1,12 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+.pytest_cache
+.coverage
+htmlcov
+.env
+*.egg-info
+.venv
+venv
+hpo_results/*.json

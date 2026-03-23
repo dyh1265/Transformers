@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nano-llm"
+version = "0.1.0"
+description = "Decoder-only transformer for training small LLMs from scratch"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.0",
+    "numpy",
+    "pytest",
+    "pytest-cov",
+    "openai>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["ruff", "mypy"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: marks tests as integration (deselect with '-m \"not integration\"')",
+]
+addopts = "-v -x -m 'not integration'"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]

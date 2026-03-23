@@ -1,0 +1,6 @@
+torch>=2.0
+numpy
+pytest
+pytest-cov
+openai>=1.0
+tokenizers
