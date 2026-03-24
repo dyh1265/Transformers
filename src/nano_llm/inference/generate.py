@@ -2,9 +2,36 @@
 
 from __future__ import annotations
 
+import unicodedata
 from typing import TYPE_CHECKING
 
 import torch
+
+# Unicode replacement char (invalid UTF-8 decode) and common wrong-chars to fix
+REPLACEMENT_CHAR = "\uFFFD"
+SANITIZE_REPLACEMENTS = {
+    "\u00B4": "'",  # acute accent ´
+    "\u02B9": "'",  # modifier letter prime ʻ
+    "\u02BA": '"',  # modifier letter double prime
+    "\u00A0": " ",  # nbsp -> space
+    "\u2018": "'",  # left single quote
+    "\u2019": "'",  # right single quote
+    "\u201C": '"',  # left double quote
+    "\u201D": '"',  # right double quote
+}
+
+
+def sanitize_output(text: str) -> str:
+    """Remove strange Unicode and invalid chars from model output."""
+    text = text.replace(REPLACEMENT_CHAR, "")
+    for bad, good in SANITIZE_REPLACEMENTS.items():
+        text = text.replace(bad, good)
+    # Remove control/surrogate chars
+    text = "".join(
+        c for c in text
+        if unicodedata.category(c) not in ("Cc", "Cf", "Cs", "Co", "Cn")
+    )
+    return text
 
 if TYPE_CHECKING:
     from nano_llm.tokenizer import BPETokenizer, ByteBPETokenizer, CharTokenizer, HFByteBPETokenizer
@@ -36,6 +63,21 @@ def _top_p_sample(logits: torch.Tensor, p: float) -> int:
     return sorted_idx[idx].item()
 
 
+def _apply_repetition_penalty(
+    logits: torch.Tensor, ids: list[int], penalty: float
+) -> torch.Tensor:
+    """Penalize logits for tokens that have already appeared."""
+    if penalty == 1.0 or not ids:
+        return logits
+    for token_id in ids:
+        if 0 <= token_id < logits.size(-1):
+            if logits[token_id] > 0:
+                logits[token_id] = logits[token_id] / penalty
+            else:
+                logits[token_id] = logits[token_id] * penalty
+    return logits
+
+
 def generate(
     model: torch.nn.Module,
     tokenizer: "CharTokenizer | BPETokenizer | ByteBPETokenizer | HFByteBPETokenizer",
@@ -46,9 +88,12 @@ def generate(
     top_k: int = 40,
     top_p: float = 0.9,
     temperature: float = 1.0,
+    repetition_penalty: float = 1.0,
     stop_at_newline: bool = True,
+    stop_sequence: str | None = None,
     seed: int | None = None,
     device: torch.device | str | None = None,
+    sanitize: bool = True,
 ) -> str:
     """Generate text autoregressively.
 
@@ -62,7 +107,9 @@ def generate(
         top_k: For top_k sampling.
         top_p: For top_p (nucleus) sampling.
         temperature: Scale logits before sampling (1.0 = no scaling).
+        repetition_penalty: Penalize repeated tokens (1.0 = off, 1.1–1.5 typical).
         stop_at_newline: Stop when generating newline.
+        stop_sequence: Stop when this string appears in decoded output.
         seed: Random seed for sampling.
         device: Device for model (default: model's device).
 
@@ -86,6 +133,8 @@ def generate(
         if temperature != 1.0 and temperature > 0:
             logits = logits / temperature
 
+        logits = _apply_repetition_penalty(logits.clone(), ids, repetition_penalty)
+
         if method == "greedy":
             next_id = _greedy_sample(logits)
         elif method == "top_k":
@@ -102,4 +151,12 @@ def generate(
             if "\n" in token_text:
                 break
 
-    return tokenizer.decode(ids)
+        if stop_sequence:
+            decoded = tokenizer.decode(ids)
+            if stop_sequence in decoded:
+                break
+
+    out = tokenizer.decode(ids)
+    if sanitize:
+        out = sanitize_output(out)
+    return out

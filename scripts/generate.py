@@ -59,6 +59,12 @@ def main() -> int:
         help="Temperature for sampling",
     )
     parser.add_argument(
+        "--repetition-penalty",
+        type=float,
+        default=1.0,
+        help="Penalize repeated tokens (1.0=off, 1.1-1.5 typical)",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=None,
@@ -80,6 +86,17 @@ def main() -> int:
         type=int,
         default=None,
         help="Max context length (default: from checkpoint seq_len)",
+    )
+    parser.add_argument(
+        "--stop-sequence",
+        type=str,
+        default=None,
+        help="Stop generation when this text appears",
+    )
+    parser.add_argument(
+        "--no-sanitize",
+        action="store_true",
+        help="Do not sanitize output (keep replacement chars, etc.)",
     )
     args = parser.parse_args()
 
@@ -103,8 +120,11 @@ def main() -> int:
         top_k=args.top_k,
         top_p=args.top_p,
         temperature=args.temperature,
+        repetition_penalty=args.repetition_penalty,
         seed=args.seed,
         stop_at_newline=not args.no_stop_newline,
+        stop_sequence=args.stop_sequence,
+        sanitize=not args.no_sanitize,
     )
     print(out)
     return 0

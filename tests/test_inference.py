@@ -8,6 +8,7 @@ import torch
 
 from nano_llm.inference import generate
 from nano_llm.inference import load_model_and_tokenizer
+from nano_llm.inference.generate import sanitize_output
 from nano_llm.model import build_model
 from nano_llm.tokenizer import CharTokenizer
 
@@ -39,6 +40,21 @@ def _make_minimal_checkpoint(tmpdir: Path) -> Path:
         path,
     )
     return path
+
+
+def test_sanitize_output_removes_replacement_char() -> None:
+    assert sanitize_output("Hello\uFFFD world") == "Hello world"
+    assert sanitize_output("a\uFFFD\uFFFDb") == "ab"
+
+
+def test_sanitize_output_fixes_punctuation() -> None:
+    assert sanitize_output("Corbin\u00B4s") == "Corbin's"
+    assert sanitize_output("don\u2019t") == "don't"
+
+
+def test_sanitize_output_preserves_normal_text() -> None:
+    assert sanitize_output("Hello world") == "Hello world"
+    assert sanitize_output("cafe") == "cafe"
 
 
 def test_load_model_and_tokenizer() -> None:
@@ -116,6 +132,26 @@ def test_generate_respects_max_new_tokens() -> None:
     )
     # prompt (1) + 3 new tokens
     assert len(tokenizer.encode(out)) <= 4 + 2  # small slack for edge cases
+
+
+def test_generate_stops_on_stop_sequence() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _make_minimal_checkpoint(Path(tmp))
+        model, tokenizer, _ = load_model_and_tokenizer(path, device="cpu")
+    out = generate(
+        model,
+        tokenizer,
+        "hello",
+        max_new_tokens=20,
+        method="greedy",
+        stop_at_newline=False,
+        stop_sequence="h",
+        seed=42,
+        device="cpu",
+    )
+    # "h" is already in prompt; function should terminate quickly and remain valid output.
+    assert isinstance(out, str)
+    assert out.startswith("hello")
 
 
 def test_load_fallback_tokenizer_from_shakespeare() -> None:

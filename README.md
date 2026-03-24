@@ -4,8 +4,8 @@ Decoder-only (GPT-style) transformer for training small language models from scr
 
 ## Features
 
-- Character-level tokenizer (default), BPE tokenizer, byte-level BPE tokenizer, or Hugging Face byte-level BPE tokenizer (`hf_bpe_byte`), sinusoidal positional encoding, causal multi-head attention
-- Tiny Shakespeare dataset
+- Character-level tokenizer (default), BPE tokenizer, byte-level BPE tokenizer, or Hugging Face byte-level BPE tokenizer (`hf_bpe_byte`); sinusoidal or RoPE positional encoding; causal multi-head attention
+- Tiny Shakespeare, WikiText-2, IMDB sentiment datasets
 - NGC PyTorch Docker container for GPU training
 - HPO agent using local Qwen (Ollama) for hyperparameter tuning
 - 8GB GPU support with config presets
@@ -31,6 +31,29 @@ make shell
 ```
 
 See `make help` for all targets.
+
+### Weights & Biases (experiment tracking)
+
+```bash
+pip install wandb
+wandb login   # paste API key from https://wandb.ai/authorize
+```
+
+Enable logging when training:
+
+```bash
+docker compose run --rm -e WANDB_API_KEY=... train python scripts/train.py \
+  --dataset-id imdb_sentiment --use-wandb --wandb-project nano-llm-imdb \
+  --wandb-tags imdb,hf_bpe_byte --epochs 10
+```
+
+Or with Make (set `WANDB_API_KEY` in your environment, or add it to `.env` for Compose):
+
+```bash
+make train-imdb ARGS='--use-wandb --wandb-project nano-llm --wandb-run-name run1'
+```
+
+Each epoch logs `train/loss`, `val/loss`, perplexity, learning rate. Use `--wandb-log-model` to upload `best.pt` at the end (larger upload).
 
 ### Local
 
@@ -85,6 +108,55 @@ docker compose run generate
 
 # With options (args pass through to generate.py)
 docker compose run generate --prompt "JULIET:" --max-tokens 200 --method top_p
+```
+
+## Pretrain → Fine-tune (IMDB)
+
+Pretrain on WikiText-2 for general language, then fine-tune on IMDB for sentiment-conditioned reviews:
+
+```bash
+# Step 1: Pretrain on WikiText-2 (10 epochs default)
+make pretrain PRETRAIN_EPOCHS=10
+
+# Step 2: Fine-tune on IMDB from pretrained checkpoint
+make finetune EPOCHS=30
+```
+
+Checkpoints:
+- Pretrain: `checkpoints/pretrain/best.pt`
+- Fine-tune: `checkpoints/imdb_sentiment/hf_bpe_byte/best.pt`
+
+Train on IMDB only (no pretrain), then interactive chat:
+
+```bash
+make train-imdb EPOCHS=30
+make chat-imdb
+```
+
+`chat-imdb` uses the same prompt format as training (`[SENTIMENT]` / `[REVIEW]`). Override checkpoint: `IMDB_CHECKPOINT=path/to/best.pt make chat-imdb`.
+
+Generate (one shot):
+```bash
+docker compose run --rm generate \
+  --checkpoint checkpoints/imdb_sentiment/hf_bpe_byte/best.pt \
+  --prompt "<bos>[SENTIMENT] positive [/SENTIMENT] [REVIEW] " \
+  --method top_p --temperature 0.7 --repetition-penalty 1.2 \
+  --max-tokens 300 --stop-sequence "[/REVIEW]"
+```
+
+Manual (same config as Makefile):
+```bash
+# Pretrain
+docker compose run --rm train python scripts/train.py \
+  --dataset-id wikitext_2 --tokenizer-type hf_bpe_byte --bpe-vocab-size 256 \
+  --position-encoding rope --epochs 10 --checkpoint-dir checkpoints/pretrain
+
+# Fine-tune
+docker compose run --rm train python scripts/train.py \
+  --dataset-id imdb_sentiment --resume checkpoints/pretrain/best.pt \
+  --tokenizer-type hf_bpe_byte --bpe-vocab-size 256 --position-encoding rope \
+  --imdb-max-review-chars 500 --epochs 30 \
+  --checkpoint-dir checkpoints/imdb_sentiment/hf_bpe_byte --early-stopping-patience 5
 ```
 
 ## HPO Agent (Local Qwen)

@@ -18,6 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["ruff", "mypy"]
+wandb = ["wandb>=0.16.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

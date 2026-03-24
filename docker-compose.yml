@@ -18,11 +18,30 @@ services:
       - .:/workspace
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
+      - WANDB_API_KEY=${WANDB_API_KEY:-}
 
   generate:
     image: nano-llm-train
     build: .
     entrypoint: ["python", "scripts/generate.py"]
+    volumes:
+      - .:/workspace
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  chat:
+    image: nano-llm-train
+    build: .
+    entrypoint: ["python", "scripts/chat.py"]
+    stdin_open: true
+    tty: true
     volumes:
       - .:/workspace
     environment:

@@ -4,3 +4,5 @@ pytest
 pytest-cov
 openai>=1.0
 tokenizers
+datasets
+wandb>=0.16.0

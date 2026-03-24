@@ -124,12 +124,16 @@ def tune(
     base_url: str = "http://localhost:11434/v1/",
     max_parse_retries: int = 2,
     tokenizer_type: str | None = None,
+    dataset_id: str | None = None,
     bpe_vocab_size: int | None = None,
     bpe_word_boundary_aware: bool | None = None,
     results_dir: str | None = None,
 ) -> list[dict]:
     """Run HPO agent loop."""
     workspace = workspace or Path.cwd()
+    effective_dataset_id = (
+        str(dataset_id).lower() if dataset_id is not None else str(DEFAULT_CONFIG.get("dataset_id", "tiny_shakespeare"))
+    )
     effective_tokenizer_type = (
         str(tokenizer_type).lower() if tokenizer_type is not None else str(DEFAULT_CONFIG.get("tokenizer_type", "char"))
     )
@@ -137,7 +141,7 @@ def tune(
         out_dir_cfg = Path(results_dir)
         out_dir = out_dir_cfg if out_dir_cfg.is_absolute() else workspace / out_dir_cfg
     else:
-        out_dir = workspace / "hpo_results" / effective_tokenizer_type
+        out_dir = workspace / "hpo_results" / effective_dataset_id / effective_tokenizer_type
     out_dir.mkdir(parents=True, exist_ok=True)
 
     trial_history: list[dict] = []
@@ -180,6 +184,8 @@ def tune(
         for k, v in DEFAULT_CONFIG.items():
             if k not in config:
                 config[k] = v
+        if dataset_id is not None:
+            config["dataset_id"] = dataset_id
         if tokenizer_type is not None:
             config["tokenizer_type"] = tokenizer_type
         if bpe_vocab_size is not None:

@@ -87,6 +87,13 @@ def load_model_and_tokenizer(
     max_len = int(cfg.get("seq_len", 128)) + 10
     if "pos_enc.pe" in state:
         max_len = state["pos_enc.pe"].shape[1]
+        position_encoding = "sinusoidal"
+    elif any("rope.cos_cached" in k for k in state):
+        rope_key = next(k for k in state if "rope.cos_cached" in k)
+        max_len = state[rope_key].shape[2]
+        position_encoding = "rope"
+    else:
+        position_encoding = str(cfg.get("position_encoding", "sinusoidal")).lower()
     model = build_model(
         vocab_size=tokenizer.vocab_size,
         d_model=int(cfg["d_model"]),
@@ -96,6 +103,7 @@ def load_model_and_tokenizer(
         max_len=max_len,
         dropout=0,
         weight_tie=cfg.get("weight_tie", True),
+        position_encoding=position_encoding,
     )
     model.load_state_dict(state)
     model.eval()

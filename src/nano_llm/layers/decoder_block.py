@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import torch
 import torch.nn as nn
 
 from nano_llm.layers.attention import CausalSelfAttention
+
+if TYPE_CHECKING:
+    from nano_llm.layers.positional_encoding import RoPE
 
 
 class DecoderBlock(nn.Module):
@@ -17,10 +22,11 @@ class DecoderBlock(nn.Module):
         num_heads: int,
         d_ff: int,
         dropout: float = 0.1,
+        rope: RoPE | None = None,
     ) -> None:
         super().__init__()
         self.ln1 = nn.LayerNorm(d_model)
-        self.attn = CausalSelfAttention(d_model, num_heads, dropout=dropout)
+        self.attn = CausalSelfAttention(d_model, num_heads, dropout=dropout, rope=rope)
         self.ln2 = nn.LayerNorm(d_model)
         self.ffn = nn.Sequential(
             nn.Linear(d_model, d_ff),

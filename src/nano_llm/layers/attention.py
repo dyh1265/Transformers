@@ -2,25 +2,32 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+if TYPE_CHECKING:
+    from nano_llm.layers.positional_encoding import RoPE
+
 
 class CausalSelfAttention(nn.Module):
-    """Multi-head self-attention with causal masking."""
+    """Multi-head self-attention with causal masking. Optional RoPE."""
 
     def __init__(
         self,
         d_model: int,
         num_heads: int,
         dropout: float = 0.1,
+        rope: RoPE | None = None,
     ) -> None:
         super().__init__()
         self.d_model = d_model
         self.num_heads = num_heads
         self.d_k = d_model // num_heads
         assert d_model % num_heads == 0
+        self.rope = rope
         self.wq = nn.Linear(d_model, d_model)
         self.wk = nn.Linear(d_model, d_model)
         self.wv = nn.Linear(d_model, d_model)
@@ -45,6 +52,8 @@ class CausalSelfAttention(nn.Module):
         q = self.wq(x).view(B, T, self.num_heads, self.d_k).transpose(1, 2)
         k = self.wk(x).view(B, T, self.num_heads, self.d_k).transpose(1, 2)
         v = self.wv(x).view(B, T, self.num_heads, self.d_k).transpose(1, 2)
+        if self.rope is not None:
+            q, k = self.rope(q, k)
         scale = self.d_k**-0.5
         logits = (q @ k.transpose(-2, -1)) * scale
         causal_mask = torch.triu(

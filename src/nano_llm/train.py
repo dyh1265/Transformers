@@ -10,8 +10,17 @@ from pathlib import Path
 
 import torch
 
-from nano_llm.config import DEFAULT_CONFIG, load_config
-from nano_llm.data import create_dataloaders, load_imdb_sentiment, load_tiny_shakespeare
+from nano_llm.config import DEFAULT_CONFIG
+from nano_llm.data import (
+    PAD_TARGET_IGNORE_INDEX,
+    create_dataloaders,
+    load_bookcorpus,
+    load_imdb_sentiment,
+    load_pg19,
+    load_tiny_shakespeare,
+    load_wikitext_2,
+    load_wikitext_103,
+)
 from nano_llm.model import build_model
 from nano_llm.tokenizer import (
     CharTokenizer,
@@ -28,6 +37,49 @@ def _count_parameters(model: torch.nn.Module) -> tuple[int, int]:
     total = sum(p.numel() for p in model.parameters())
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     return total, trainable
+
+
+def _wandb_sanitize_config(cfg: dict) -> dict[str, object]:
+    """Config dict safe for wandb (JSON-serializable scalars / small structures)."""
+    out: dict[str, object] = {}
+    for k, v in cfg.items():
+        if k.startswith("wandb_") and k != "wandb_tags":
+            continue
+        if v is None:
+            continue
+        try:
+            json.dumps(v)
+            out[k] = v
+        except (TypeError, ValueError):
+            out[k] = str(v)
+    return out
+
+
+def _maybe_init_wandb(cfg: dict) -> object | None:
+    """Initialize Weights & Biases if use_wandb. Returns run object or None."""
+    if not cfg.get("use_wandb"):
+        return None
+    try:
+        import wandb
+    except ImportError:
+        logger.warning("use_wandb=True but wandb is not installed. Install with: pip install wandb")
+        return None
+
+    tags = cfg.get("wandb_tags")
+    if isinstance(tags, str):
+        tags = [t.strip() for t in tags.split(",") if t.strip()]
+    elif tags is not None and not isinstance(tags, (list, tuple)):
+        tags = None
+
+    run = wandb.init(
+        project=str(cfg.get("wandb_project", "nano-llm")),
+        entity=cfg.get("wandb_entity") or None,
+        name=cfg.get("wandb_run_name") or None,
+        tags=list(tags) if tags else None,
+        config=_wandb_sanitize_config(cfg),
+    )
+    logger.info("W&B run started (project=%s)", cfg.get("wandb_project", "nano-llm"))
+    return run
 
 
 def _comparison_metrics(
@@ -70,17 +122,65 @@ def train(config: dict | None = None) -> dict:
 
     logger.info("Loading data...")
     dataset_id = str(cfg.get("dataset_id", "tiny_shakespeare")).lower()
+    train_samples, val_samples = None, None
     if dataset_id == "tiny_shakespeare":
         train_text, val_text = load_tiny_shakespeare(val_split=0.1)
+    elif dataset_id == "wikitext_2":
+        train_text, val_text = load_wikitext_2(
+            max_train_samples=cfg.get("wikitext_max_train_samples"),
+            max_val_samples=cfg.get("wikitext_max_val_samples"),
+        )
     elif dataset_id == "imdb_sentiment":
-        train_text, val_text = load_imdb_sentiment(
+        train_samples, val_samples = load_imdb_sentiment(
             max_train_samples=cfg.get("imdb_max_train_samples"),
             max_val_samples=cfg.get("imdb_max_val_samples"),
+            max_review_chars=cfg.get("imdb_max_review_chars"),
+        )
+        train_text = "\n".join(train_samples)
+        val_text = "\n".join(val_samples)
+    elif dataset_id == "pg19":
+        train_text, val_text = load_pg19(
+            max_train_books=cfg.get("pg19_max_train_books"),
+            max_val_books=cfg.get("pg19_max_val_books"),
+            max_chars_per_book=cfg.get("pg19_max_chars_per_book"),
+        )
+    elif dataset_id == "bookcorpus":
+        try:
+            train_text, val_text = load_bookcorpus(
+                max_train_books=cfg.get("pg19_max_train_books"),
+                max_val_books=cfg.get("pg19_max_val_books"),
+                max_chars_per_book=cfg.get("pg19_max_chars_per_book"),
+            )
+        except (ValueError, RuntimeError) as e:
+            if "empty" in str(e).lower():
+                logger.warning(
+                    "BookCorpus produced empty data, falling back to WikiText-103: %s", e
+                )
+                train_text, val_text = load_wikitext_103(
+                    max_train_samples=cfg.get("wikitext_max_train_samples"),
+                    max_val_samples=cfg.get("wikitext_max_val_samples"),
+                )
+            else:
+                raise
+    elif dataset_id == "wikitext_103":
+        # Default limit to avoid OOM; full corpus is ~1.8M lines
+        max_train = cfg.get("wikitext_max_train_samples")
+        if max_train is None:
+            max_train = 200_000
+            logger.info(
+                "WikiText-103: default max_train_samples=%s "
+                "(set wikitext_max_train_samples for full corpus)",
+                max_train,
+            )
+        train_text, val_text = load_wikitext_103(
+            max_train_samples=max_train,
+            max_val_samples=cfg.get("wikitext_max_val_samples") or 5000,
         )
     else:
         raise ValueError(
             f"Unsupported dataset_id: {dataset_id}. "
-            "Use one of: tiny_shakespeare, imdb_sentiment"
+            "Use one of: tiny_shakespeare, wikitext_2, wikitext_103, "
+            "imdb_sentiment, pg19, bookcorpus"
         )
     resume_path = cfg.get("resume")
     tokenizer_type = str(cfg.get("tokenizer_type", "char")).lower()
@@ -90,7 +190,16 @@ def train(config: dict | None = None) -> dict:
         logger.info("Resuming from checkpoint %s", resume_path)
         ckpt = torch.load(resume_path, map_location="cpu", weights_only=True)
         # Merge model architecture from checkpoint, keep training control (epochs, lr, etc.)
-        model_keys = ("d_model", "num_heads", "num_layers", "d_ff", "seq_len", "weight_tie", "dropout")
+        model_keys = (
+            "d_model",
+            "num_heads",
+            "num_layers",
+            "d_ff",
+            "seq_len",
+            "weight_tie",
+            "dropout",
+            "position_encoding",
+        )
         for k in model_keys:
             if k in ckpt["config"]:
                 cfg[k] = ckpt["config"][k]
@@ -128,8 +237,11 @@ def train(config: dict | None = None) -> dict:
         tokenizer,
         seq_len=seq_len,
         batch_size=batch_size,
+        train_samples=train_samples if dataset_id == "imdb_sentiment" else None,
+        val_samples=val_samples if dataset_id == "imdb_sentiment" else None,
     )
 
+    pos_enc = str(cfg.get("position_encoding", "sinusoidal")).lower()
     if resume_path and Path(resume_path).exists():
         model = build_model(
             vocab_size=vocab_size,
@@ -140,6 +252,7 @@ def train(config: dict | None = None) -> dict:
             max_len=seq_len + 10,
             dropout=float(cfg["dropout"]),
             weight_tie=cfg.get("weight_tie", True),
+            position_encoding=pos_enc,
         )
         model.load_state_dict(ckpt["model"])
     else:
@@ -152,6 +265,7 @@ def train(config: dict | None = None) -> dict:
             max_len=seq_len + 10,
             dropout=float(cfg["dropout"]),
             weight_tie=cfg.get("weight_tie", True),
+            position_encoding=pos_enc,
         )
     model = model.to(device)
     total_params, trainable_params = _count_parameters(model)
@@ -187,7 +301,7 @@ def train(config: dict | None = None) -> dict:
         )
     else:
         scheduler = None
-    criterion = torch.nn.CrossEntropyLoss()
+    criterion = torch.nn.CrossEntropyLoss(ignore_index=PAD_TARGET_IGNORE_INDEX)
 
     ckpt_dir = Path(cfg.get("checkpoint_dir", "checkpoints"))
     ckpt_dir.mkdir(parents=True, exist_ok=True)
@@ -200,6 +314,27 @@ def train(config: dict | None = None) -> dict:
 
     start = time.perf_counter()
     scaler = torch.amp.GradScaler("cuda") if use_amp and device.type == "cuda" else None
+
+    wandb_run = _maybe_init_wandb(cfg)
+    if wandb_run is not None:
+        try:
+            import wandb
+
+            wandb.define_metric("epoch")
+            wandb.define_metric("train/*", step_metric="epoch")
+            wandb.define_metric("val/*", step_metric="epoch")
+            wandb.log(
+                {
+                    "epoch": 0,
+                    "model/total_params": total_params,
+                    "model/trainable_params": trainable_params,
+                    "data/train_tokens": train_token_count,
+                    "data/val_tokens": val_token_count,
+                    "data/train_batches": len(train_loader),
+                }
+            )
+        except Exception as e:
+            logger.warning("W&B initial log failed: %s", e)
 
     for epoch in range(epochs):
         model.train()
@@ -280,11 +415,31 @@ def train(config: dict | None = None) -> dict:
         current_lr = optimizer.param_groups[0]["lr"]
         logger.info(
             (
-                f"Epoch {epoch+1}/{epochs} train_loss={train_loss:.4f} val_loss={val_loss:.4f} "
-                f"val_ppl={val_metrics['perplexity']:.2f} val_bpb={val_metrics['bits_per_byte']:.3f} "
-                f"lr={current_lr:.2e}"
+                f"Epoch {epoch + 1}/{epochs} train_loss={train_loss:.4f} "
+                f"val_loss={val_loss:.4f} val_ppl={val_metrics['perplexity']:.2f} "
+                f"val_bpb={val_metrics['bits_per_byte']:.3f} lr={current_lr:.2e}"
             )
         )
+
+        if wandb_run is not None:
+            try:
+                import wandb
+
+                wandb.log(
+                    {
+                        "epoch": epoch + 1,
+                        "train/loss": train_loss,
+                        "train/perplexity": train_metrics["perplexity"],
+                        "val/loss": val_loss,
+                        "val/perplexity": val_metrics["perplexity"],
+                        "val/bits_per_byte": val_metrics["bits_per_byte"],
+                        "lr": current_lr,
+                        "best_val_loss": best_val_loss,
+                    },
+                    step=epoch + 1,
+                )
+            except Exception as e:
+                logger.warning("wandb.log failed: %s", e)
 
         if patience > 0 and val_loader is not None and epochs_since_improvement >= patience:
             logger.info(
@@ -341,4 +496,23 @@ def train(config: dict | None = None) -> dict:
     with open(results_dir / f"trial_{results['trial_id']}.json", "w") as f:
         json.dump(results, f, indent=2)
     logger.info("Results: %s", results)
+
+    if wandb_run is not None:
+        try:
+            import wandb
+
+            wandb.summary["best_val_loss"] = best_val_loss
+            wandb.summary["duration_sec"] = results["duration_sec"]
+            wandb.summary["epochs_completed"] = results["epochs_completed"]
+            if cfg.get("wandb_log_model") and ckpt_path.exists():
+                wandb.save(str(ckpt_path))
+        except Exception as e:
+            logger.warning("W&B summary/artifact failed: %s", e)
+        try:
+            import wandb
+
+            wandb.finish()
+        except Exception as e:
+            logger.warning("wandb.finish() failed: %s", e)
+
     return results

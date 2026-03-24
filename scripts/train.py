@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -44,15 +43,121 @@ def parse_args() -> argparse.Namespace:
         help="Prevent BPE merges across whitespace boundaries",
     )
     p.add_argument("--batch-size", type=int, dest="batch_size", help="Batch size")
+    p.add_argument(
+        "--dataset-id",
+        type=str,
+        dest="dataset_id",
+        choices=[
+            "tiny_shakespeare",
+            "wikitext_2",
+            "wikitext_103",
+            "imdb_sentiment",
+            "pg19",
+            "bookcorpus",
+        ],
+        help="Dataset ID",
+    )
+    p.add_argument(
+        "--wikitext-max-train-samples",
+        type=int,
+        dest="wikitext_max_train_samples",
+        help="Limit WikiText-2 train lines for faster pretrain",
+    )
+    p.add_argument(
+        "--wikitext-max-val-samples",
+        type=int,
+        dest="wikitext_max_val_samples",
+        help="Limit WikiText-2 validation lines",
+    )
+    p.add_argument(
+        "--imdb-max-train-samples",
+        type=int,
+        dest="imdb_max_train_samples",
+        help="Limit IMDB train samples for faster experiments",
+    )
+    p.add_argument(
+        "--imdb-max-val-samples",
+        type=int,
+        dest="imdb_max_val_samples",
+        help="Limit IMDB validation samples for faster experiments",
+    )
+    p.add_argument(
+        "--imdb-max-review-chars",
+        type=int,
+        dest="imdb_max_review_chars",
+        help="Truncate each IMDB review to at most N chars (at word boundary)",
+    )
+    p.add_argument(
+        "--pg19-max-train-books",
+        type=int,
+        dest="pg19_max_train_books",
+        help="Limit PG-19 train books for faster experiments",
+    )
+    p.add_argument(
+        "--pg19-max-val-books",
+        type=int,
+        dest="pg19_max_val_books",
+        help="Limit PG-19 val books",
+    )
+    p.add_argument(
+        "--pg19-max-chars-per-book",
+        type=int,
+        dest="pg19_max_chars_per_book",
+        help="Truncate each PG-19 book to at most N chars",
+    )
     p.add_argument("--learning-rate", type=float, dest="learning_rate", help="Learning rate")
-    p.add_argument("--lr-decay", type=str, dest="lr_decay", choices=["cosine", "linear", "none"], help="LR decay: cosine, linear, or none")
-    p.add_argument("--lr-min", type=float, dest="lr_min", help="Minimum LR for decay (default 1e-6)")
+    p.add_argument(
+        "--lr-decay",
+        type=str,
+        dest="lr_decay",
+        choices=["cosine", "linear", "none"],
+        help="LR decay: cosine, linear, or none",
+    )
+    p.add_argument(
+        "--lr-min",
+        type=float,
+        dest="lr_min",
+        help="Minimum LR for decay (default 1e-6)",
+    )
     p.add_argument("--epochs", type=int, help="Number of epochs")
     p.add_argument("--trial-id", type=int, dest="trial_id", help="HPO trial ID")
     p.add_argument("--checkpoint-dir", type=str, dest="checkpoint_dir", default=None)
     p.add_argument("--hpo-results-dir", type=str, dest="hpo_results_dir", default=None)
     p.add_argument("--resume", type=str, help="Path to checkpoint to resume training from")
-    p.add_argument("--early-stopping-patience", type=int, dest="early_stopping_patience", help="Stop if val_loss unchanged for N epochs (0=disabled)")
+    p.add_argument(
+        "--position-encoding",
+        type=str,
+        dest="position_encoding",
+        choices=["sinusoidal", "rope"],
+        help="Position encoding: sinusoidal (default) or rope",
+    )
+    p.add_argument(
+        "--early-stopping-patience",
+        type=int,
+        dest="early_stopping_patience",
+        help="Stop if val_loss unchanged for N epochs (0=disabled)",
+    )
+    p.add_argument(
+        "--use-wandb",
+        action="store_true",
+        dest="use_wandb",
+        help="Log metrics to Weights & Biases (pip install wandb; wandb login)",
+    )
+    p.add_argument("--wandb-project", type=str, dest="wandb_project", help="W&B project name")
+    p.add_argument("--wandb-run-name", type=str, dest="wandb_run_name", help="W&B run name")
+    p.add_argument(
+        "--wandb-entity",
+        type=str,
+        dest="wandb_entity",
+        help="W&B entity (team/username)",
+    )
+    p.add_argument("--wandb-tags", type=str, dest="wandb_tags", help="W&B tags (comma-separated)")
+    p.add_argument(
+        "--wandb-log-model",
+        action="store_true",
+        dest="wandb_log_model",
+        help="Upload best checkpoint to W&B at end",
+    )
     return p.parse_args()
 
 
@@ -84,6 +189,24 @@ def main() -> None:
         overrides["bpe_word_boundary_aware"] = True
     if args.batch_size is not None:
         overrides["batch_size"] = args.batch_size
+    if args.dataset_id is not None:
+        overrides["dataset_id"] = args.dataset_id
+    if args.wikitext_max_train_samples is not None:
+        overrides["wikitext_max_train_samples"] = args.wikitext_max_train_samples
+    if args.wikitext_max_val_samples is not None:
+        overrides["wikitext_max_val_samples"] = args.wikitext_max_val_samples
+    if args.imdb_max_train_samples is not None:
+        overrides["imdb_max_train_samples"] = args.imdb_max_train_samples
+    if args.imdb_max_val_samples is not None:
+        overrides["imdb_max_val_samples"] = args.imdb_max_val_samples
+    if args.imdb_max_review_chars is not None:
+        overrides["imdb_max_review_chars"] = args.imdb_max_review_chars
+    if args.pg19_max_train_books is not None:
+        overrides["pg19_max_train_books"] = args.pg19_max_train_books
+    if args.pg19_max_val_books is not None:
+        overrides["pg19_max_val_books"] = args.pg19_max_val_books
+    if args.pg19_max_chars_per_book is not None:
+        overrides["pg19_max_chars_per_book"] = args.pg19_max_chars_per_book
     if args.learning_rate is not None:
         overrides["learning_rate"] = args.learning_rate
     if args.lr_decay is not None:
@@ -100,8 +223,22 @@ def main() -> None:
         overrides["hpo_results_dir"] = args.hpo_results_dir
     if args.resume:
         overrides["resume"] = args.resume
+    if args.position_encoding is not None:
+        overrides["position_encoding"] = args.position_encoding
     if args.early_stopping_patience is not None:
         overrides["early_stopping_patience"] = args.early_stopping_patience
+    if args.use_wandb:
+        overrides["use_wandb"] = True
+    if args.wandb_project is not None:
+        overrides["wandb_project"] = args.wandb_project
+    if args.wandb_run_name is not None:
+        overrides["wandb_run_name"] = args.wandb_run_name
+    if args.wandb_entity is not None:
+        overrides["wandb_entity"] = args.wandb_entity
+    if args.wandb_tags is not None:
+        overrides["wandb_tags"] = args.wandb_tags
+    if args.wandb_log_model:
+        overrides["wandb_log_model"] = True
 
     config.update(overrides)
     train(config)
@@ -111,6 +248,9 @@ if __name__ == "__main__":
     import traceback
     try:
         main()
-    except Exception:
+    except Exception as e:
         traceback.print_exc()
+        print(f"\nTraining failed: {e}", file=sys.stderr, flush=True)
+        sys.stdout.flush()
+        sys.stderr.flush()
         sys.exit(1)

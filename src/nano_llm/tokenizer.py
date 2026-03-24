@@ -325,7 +325,12 @@ class HFByteBPETokenizer:
             min_frequency=2,
             special_tokens=[cls.PAD_TOKEN, cls.BOS_TOKEN, cls.EOS_TOKEN, cls.UNK_TOKEN],
         )
-        tokenizer.train_from_iterator([text], trainer=trainer)
+        # Chunk text to avoid tokenizers progress/memory issues with huge strings
+        if not text:
+            text = " "
+        chunk_size = 1_000_000
+        chunks = [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
+        tokenizer.train_from_iterator(iter(chunks), trainer=trainer)
         tokenizer.decoder = ByteLevelDecoder()
         tokenizer_json = tokenizer.to_str()
         return cls(tokenizer=tokenizer, tokenizer_json=tokenizer_json)
