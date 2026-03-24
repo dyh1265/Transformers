@@ -158,6 +158,31 @@ def parse_args() -> argparse.Namespace:
         dest="wandb_log_model",
         help="Upload best checkpoint to W&B at end",
     )
+    p.add_argument(
+        "--mixed-precision",
+        type=str,
+        dest="mixed_precision",
+        choices=["fp32", "fp16", "bf16"],
+        help="CUDA: fp16 (GradScaler), bf16 (often faster on Ampere+), fp32",
+    )
+    p.add_argument(
+        "--no-cuda-tf32",
+        action="store_true",
+        dest="no_cuda_tf32",
+        help="Disable TF32 for CUDA matmul/cudnn (stricter, often slower)",
+    )
+    p.add_argument(
+        "--no-cuda-flash-sdp",
+        action="store_true",
+        dest="no_cuda_flash_sdp",
+        help="Skip SDPA backend tuning (flash / mem-efficient preference)",
+    )
+    p.add_argument(
+        "--torch-compile",
+        action="store_true",
+        dest="torch_compile",
+        help="Wrap model with torch.compile on CUDA (first epoch may be slow)",
+    )
     return p.parse_args()
 
 
@@ -239,6 +264,14 @@ def main() -> None:
         overrides["wandb_tags"] = args.wandb_tags
     if args.wandb_log_model:
         overrides["wandb_log_model"] = True
+    if args.mixed_precision is not None:
+        overrides["mixed_precision"] = args.mixed_precision
+    if args.no_cuda_tf32:
+        overrides["cuda_allow_tf32"] = False
+    if args.no_cuda_flash_sdp:
+        overrides["cuda_prefer_flash_attn"] = False
+    if args.torch_compile:
+        overrides["torch_compile"] = True
 
     config.update(overrides)
     train(config)

@@ -32,6 +32,35 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def _configure_cuda_training(cfg: dict, device: torch.device) -> None:
+    """TF32 and SDPA backend preferences for faster matmul / attention on CUDA."""
+    if device.type != "cuda":
+        return
+    if cfg.get("cuda_allow_tf32", True):
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        logger.info("CUDA TF32 enabled for matmul and cuDNN")
+    if not cfg.get("cuda_prefer_flash_attn", True):
+        return
+    try:
+        from torch.backends.cuda import (
+            enable_cudnn_sdp,
+            enable_flash_sdp,
+            enable_math_sdp,
+            enable_mem_efficient_sdp,
+        )
+
+        enable_cudnn_sdp(False)
+        enable_flash_sdp(True)
+        enable_mem_efficient_sdp(True)
+        enable_math_sdp(True)
+        logger.info(
+            "CUDA SDPA backends: cudnn=False flash=True mem_efficient=True math=True (fallback)"
+        )
+    except Exception as e:
+        logger.warning("CUDA SDPA backend tuning skipped: %s", e)
+
+
 def _count_parameters(model: torch.nn.Module) -> tuple[int, int]:
     """Return (total_params, trainable_params)."""
     total = sum(p.numel() for p in model.parameters())
@@ -118,7 +147,18 @@ def train(config: dict | None = None) -> dict:
         torch.cuda.manual_seed_all(seed)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    use_amp = cfg.get("mixed_precision", "fp16") != "fp32"
+    mp = str(cfg.get("mixed_precision", "fp16")).lower()
+    if mp not in ("fp32", "fp16", "bf16"):
+        logger.warning("Unknown mixed_precision=%r; using fp16", mp)
+        mp = "fp16"
+    if mp in ("fp16", "bf16") and device.type != "cuda":
+        logger.warning("mixed_precision=%s requires CUDA; using fp32", mp)
+        mp = "fp32"
+    use_cuda_amp = device.type == "cuda" and mp in ("fp16", "bf16")
+    amp_dtype = torch.bfloat16 if mp == "bf16" else torch.float16
+    use_grad_scaler = device.type == "cuda" and mp == "fp16"
+
+    _configure_cuda_training(cfg, device)
 
     logger.info("Loading data...")
     dataset_id = str(cfg.get("dataset_id", "tiny_shakespeare")).lower()
@@ -268,6 +308,12 @@ def train(config: dict | None = None) -> dict:
             position_encoding=pos_enc,
         )
     model = model.to(device)
+    if device.type == "cuda" and cfg.get("torch_compile", False):
+        try:
+            model = torch.compile(model, dynamic=False)
+            logger.info("torch.compile enabled (dynamic=False)")
+        except Exception as e:
+            logger.warning("torch.compile disabled: %s", e)
     total_params, trainable_params = _count_parameters(model)
     logger.info(
         "Model config: d_model=%s num_heads=%s num_layers=%s d_ff=%s seq_len=%s dropout=%s",
@@ -313,7 +359,7 @@ def train(config: dict | None = None) -> dict:
     epochs_since_improvement = 0
 
     start = time.perf_counter()
-    scaler = torch.amp.GradScaler("cuda") if use_amp and device.type == "cuda" else None
+    scaler = torch.amp.GradScaler("cuda") if use_grad_scaler else None
 
     wandb_run = _maybe_init_wandb(cfg)
     if wandb_run is not None:
@@ -342,13 +388,17 @@ def train(config: dict | None = None) -> dict:
         for x, y in train_loader:
             x, y = x.to(device), y.to(device)
             optimizer.zero_grad()
-            if use_amp and device.type == "cuda" and scaler is not None:
-                with torch.amp.autocast("cuda"):
+            if use_cuda_amp:
+                with torch.amp.autocast("cuda", dtype=amp_dtype):
                     logits = model(x)
                     loss = criterion(logits.view(-1, vocab_size), y.view(-1))
-                scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
+                if scaler is not None:
+                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    loss.backward()
+                    optimizer.step()
             else:
                 logits = model(x)
                 loss = criterion(logits.view(-1, vocab_size), y.view(-1))
@@ -365,8 +415,13 @@ def train(config: dict | None = None) -> dict:
             with torch.no_grad():
                 for x, y in val_loader:
                     x, y = x.to(device), y.to(device)
-                    logits = model(x)
-                    loss = criterion(logits.view(-1, vocab_size), y.view(-1))
+                    if use_cuda_amp:
+                        with torch.amp.autocast("cuda", dtype=amp_dtype):
+                            logits = model(x)
+                            loss = criterion(logits.view(-1, vocab_size), y.view(-1))
+                    else:
+                        logits = model(x)
+                        loss = criterion(logits.view(-1, vocab_size), y.view(-1))
                     val_loss += loss.item() * x.size(0)
             val_loss /= len(val_loader.dataset)
             history["val_loss"].append(val_loss)
@@ -473,7 +528,7 @@ def train(config: dict | None = None) -> dict:
         "trial_id": cfg.get("trial_id", 0),
         "config": {k: v for k, v in cfg.items() if k not in ("trial_id",)},
         "seed": seed,
-        "precision": "fp16" if use_amp else "fp32",
+        "precision": mp,
         "dataset_id": dataset_id,
         "config_hash": "sha256:...",
         "final_train_loss": history["loss"][-1],

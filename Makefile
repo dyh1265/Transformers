@@ -25,6 +25,8 @@ BATCH_SIZE ?= 8
 SEQ_LEN ?= 256
 # Weights & Biases: e.g. WANDB_ARGS='--use-wandb --wandb-project nano-llm --wandb-tags imdb'
 WANDB_ARGS ?=
+# CUDA training (GPU container): e.g. TRAIN_PERF_ARGS='--mixed-precision bf16 --torch-compile'
+TRAIN_PERF_ARGS ?=
 
 COMPOSE := docker compose
 
@@ -80,6 +82,7 @@ help:
 	@echo "  make finetune EPOCHS=30"
 	@echo "  make train-imdb EPOCHS=30  (BPE + IMDB only)"
 	@echo "  make train-imdb WANDB_ARGS='--use-wandb --wandb-project myproj'  (log to W&B)"
+	@echo "  make train-imdb TRAIN_PERF_ARGS='--mixed-precision bf16 --torch-compile'  (CUDA perf)"
 
 lint:
 	python -m ruff check src/ tests/
@@ -105,29 +108,29 @@ train: build
 	$(COMPOSE) up --build
 
 resume: build
-	$(COMPOSE) run --rm $(SERVICE) python scripts/train.py --resume $(CHECKPOINT) --epochs $(EPOCHS)
+	$(COMPOSE) run --rm $(SERVICE) python scripts/train.py --resume $(CHECKPOINT) --epochs $(EPOCHS) $(WANDB_ARGS) $(TRAIN_PERF_ARGS)
 
 pretrain: build
-	$(COMPOSE) run --rm $(SERVICE) python scripts/train.py --dataset-id wikitext_2 --tokenizer-type hf_bpe_byte --bpe-vocab-size 256 --position-encoding rope --d-model $(D_MODEL) --num-heads $(NUM_HEADS) --num-layers $(NUM_LAYERS) --d-ff $(D_FF) --seq-len $(SEQ_LEN) --batch-size $(BATCH_SIZE) --epochs $(PRETRAIN_EPOCHS) --checkpoint-dir checkpoints/pretrain $(WANDB_ARGS)
+	$(COMPOSE) run --rm $(SERVICE) python scripts/train.py --dataset-id wikitext_2 --tokenizer-type hf_bpe_byte --bpe-vocab-size 256 --position-encoding rope --d-model $(D_MODEL) --num-heads $(NUM_HEADS) --num-layers $(NUM_LAYERS) --d-ff $(D_FF) --seq-len $(SEQ_LEN) --batch-size $(BATCH_SIZE) --epochs $(PRETRAIN_EPOCHS) --checkpoint-dir checkpoints/pretrain $(WANDB_ARGS) $(TRAIN_PERF_ARGS)
 
 # Uses WikiText-103 (large, reliable). Fallback from bookcorpus if that fails.
 pretrain-pg19: build
-	$(COMPOSE) run --rm $(SERVICE) python scripts/train.py --dataset-id wikitext_103 --tokenizer-type hf_bpe_byte --bpe-vocab-size 256 --position-encoding rope --d-model 256 --num-heads 4 --num-layers 5 --d-ff 1024 --seq-len 256 --batch-size 16 --epochs $(PRETRAIN_EPOCHS) --checkpoint-dir checkpoints/pretrain_pg19 $(WANDB_ARGS) $(ARGS)
+	$(COMPOSE) run --rm $(SERVICE) python scripts/train.py --dataset-id wikitext_103 --tokenizer-type hf_bpe_byte --bpe-vocab-size 256 --position-encoding rope --d-model 256 --num-heads 4 --num-layers 5 --d-ff 1024 --seq-len 256 --batch-size 16 --epochs $(PRETRAIN_EPOCHS) --checkpoint-dir checkpoints/pretrain_pg19 $(WANDB_ARGS) $(TRAIN_PERF_ARGS) $(ARGS)
 
 # Tries BookCorpus (Gutenberg books); falls back to WikiText-103 if empty
 pretrain-books: build
-	$(COMPOSE) run --rm $(SERVICE) python scripts/train.py --dataset-id bookcorpus --tokenizer-type hf_bpe_byte --bpe-vocab-size 256 --position-encoding rope --d-model 256 --num-heads 4 --num-layers 5 --d-ff 1024 --seq-len 256 --batch-size 16 --epochs $(PRETRAIN_EPOCHS) --checkpoint-dir checkpoints/pretrain_books $(WANDB_ARGS) $(ARGS)
+	$(COMPOSE) run --rm $(SERVICE) python scripts/train.py --dataset-id bookcorpus --tokenizer-type hf_bpe_byte --bpe-vocab-size 256 --position-encoding rope --d-model 256 --num-heads 4 --num-layers 5 --d-ff 1024 --seq-len 256 --batch-size 16 --epochs $(PRETRAIN_EPOCHS) --checkpoint-dir checkpoints/pretrain_books $(WANDB_ARGS) $(TRAIN_PERF_ARGS) $(ARGS)
 
 finetune: build
-	$(COMPOSE) run --rm $(SERVICE) python scripts/train.py --dataset-id imdb_sentiment --resume $(PRETRAIN_CHECKPOINT) --tokenizer-type hf_bpe_byte --bpe-vocab-size 256 --position-encoding rope --seq-len $(SEQ_LEN) --batch-size $(BATCH_SIZE) --imdb-max-review-chars 500 --epochs $(EPOCHS) --checkpoint-dir checkpoints/imdb_sentiment/hf_bpe_byte --early-stopping-patience 5 $(WANDB_ARGS)
+	$(COMPOSE) run --rm $(SERVICE) python scripts/train.py --dataset-id imdb_sentiment --resume $(PRETRAIN_CHECKPOINT) --tokenizer-type hf_bpe_byte --bpe-vocab-size 256 --position-encoding rope --seq-len $(SEQ_LEN) --batch-size $(BATCH_SIZE) --imdb-max-review-chars 500 --epochs $(EPOCHS) --checkpoint-dir checkpoints/imdb_sentiment/hf_bpe_byte --early-stopping-patience 5 $(WANDB_ARGS) $(TRAIN_PERF_ARGS)
 
 # BPE tokenizer + model trained only on IMDB (no --resume)
 train-imdb: build
-	$(COMPOSE) run --rm $(SERVICE) python scripts/train.py --dataset-id imdb_sentiment --tokenizer-type hf_bpe_byte --bpe-vocab-size 256 --position-encoding rope --d-model $(D_MODEL) --num-heads $(NUM_HEADS) --num-layers $(NUM_LAYERS) --d-ff $(D_FF) --seq-len $(SEQ_LEN) --batch-size $(BATCH_SIZE) --imdb-max-review-chars 500 --epochs $(EPOCHS) --checkpoint-dir checkpoints/imdb_sentiment/hf_bpe_byte --early-stopping-patience 5 $(ARGS)
+	$(COMPOSE) run --rm $(SERVICE) python scripts/train.py --dataset-id imdb_sentiment --tokenizer-type hf_bpe_byte --bpe-vocab-size 256 --position-encoding rope --d-model $(D_MODEL) --num-heads $(NUM_HEADS) --num-layers $(NUM_LAYERS) --d-ff $(D_FF) --seq-len $(SEQ_LEN) --batch-size $(BATCH_SIZE) --imdb-max-review-chars 500 --epochs $(EPOCHS) --checkpoint-dir checkpoints/imdb_sentiment/hf_bpe_byte --early-stopping-patience 5 $(WANDB_ARGS) $(TRAIN_PERF_ARGS) $(ARGS)
 
 train-best: build
 	$(COMPOSE) run --rm $(SERVICE) python -c "import json; from pathlib import Path; base=Path('$(HPO_RESULTS_DIR)'); d=json.loads((base/'best_config.json').read_text()); cfg=d['config']; ds=str(cfg.get('dataset_id','tiny_shakespeare')); tok=str(cfg.get('tokenizer_type','char')); cfg['checkpoint_dir']=f'checkpoints/{ds}/{tok}'; (base/'best_train_config.json').write_text(json.dumps(cfg, indent=2))"
-	$(COMPOSE) run --rm $(SERVICE) python scripts/train.py --config $(HPO_RESULTS_DIR)/best_train_config.json --epochs $(EPOCHS) --early-stopping-patience 5 $(WANDB_ARGS)
+	$(COMPOSE) run --rm $(SERVICE) python scripts/train.py --config $(HPO_RESULTS_DIR)/best_train_config.json --epochs $(EPOCHS) --early-stopping-patience 5 $(WANDB_ARGS) $(TRAIN_PERF_ARGS)
 
 generate: build
 	$(COMPOSE) run --rm generate --prompt "$(PROMPT)" --max-tokens $(MAX_TOKENS) --method $(METHOD) $(ARGS)

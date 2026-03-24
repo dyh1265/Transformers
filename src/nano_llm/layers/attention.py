@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import torch.nn.functional as functional
 
 if TYPE_CHECKING:
     from nano_llm.layers.positional_encoding import RoPE
@@ -48,21 +48,32 @@ class CausalSelfAttention(nn.Module):
         x: torch.Tensor,
         mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        B, T, C = x.shape
-        q = self.wq(x).view(B, T, self.num_heads, self.d_k).transpose(1, 2)
-        k = self.wk(x).view(B, T, self.num_heads, self.d_k).transpose(1, 2)
-        v = self.wv(x).view(B, T, self.num_heads, self.d_k).transpose(1, 2)
+        b, t, c = x.shape
+        q = self.wq(x).view(b, t, self.num_heads, self.d_k).transpose(1, 2)
+        k = self.wk(x).view(b, t, self.num_heads, self.d_k).transpose(1, 2)
+        v = self.wv(x).view(b, t, self.num_heads, self.d_k).transpose(1, 2)
         if self.rope is not None:
             q, k = self.rope(q, k)
+        if mask is None:
+            dropout_p = float(self.dropout.p) if self.training else 0.0
+            attn = functional.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                attn_mask=None,
+                dropout_p=dropout_p,
+                is_causal=True,
+            )
+            out = attn.transpose(1, 2).contiguous().view(b, t, c)
+            return self.wo(out)
         scale = self.d_k**-0.5
         logits = (q @ k.transpose(-2, -1)) * scale
         causal_mask = torch.triu(
-            torch.ones(T, T, device=x.device, dtype=torch.bool), diagonal=1
+            torch.ones(t, t, device=x.device, dtype=torch.bool), diagonal=1
         )
         logits = logits.masked_fill(causal_mask.unsqueeze(0).unsqueeze(0), float("-inf"))
-        if mask is not None:
-            logits = logits + mask
-        weights = F.softmax(logits, dim=-1)
+        logits = logits + mask
+        weights = functional.softmax(logits, dim=-1)
         weights = self.dropout(weights)
-        out = (weights @ v).transpose(1, 2).contiguous().view(B, T, C)
+        out = (weights @ v).transpose(1, 2).contiguous().view(b, t, c)
         return self.wo(out)

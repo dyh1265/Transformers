@@ -35,7 +35,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "pg19_max_chars_per_book": None,
     "position_encoding": "sinusoidal",
     "weight_tie": True,
+    # fp32 | fp16 (GradScaler) | bf16 (CUDA autocast, no scaler; Ampere+ friendly)
     "mixed_precision": "fp16",
+    # CUDA-only performance (ignored on CPU)
+    "cuda_allow_tf32": True,
+    "cuda_prefer_flash_attn": True,
+    "torch_compile": False,
     "gradient_checkpointing": False,
     "gradient_accumulation_steps": 1,
     "seed": 42,

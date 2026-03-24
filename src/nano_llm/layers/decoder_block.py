@@ -35,6 +35,7 @@ class DecoderBlock(nn.Module):
             nn.Linear(d_ff, d_model),
             nn.Dropout(dropout),
         )
+        
 
     def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
         x = x + self.attn(self.ln1(x), mask=mask)

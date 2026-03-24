@@ -37,6 +37,7 @@ dist/
 # Local ML artifacts
 checkpoints/
 hpo_results/
+wandb/
 
 # OS files
 .DS_Store
