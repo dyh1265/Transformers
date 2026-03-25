@@ -15,7 +15,32 @@ def _rotate_half(x: torch.Tensor) -> torch.Tensor:
     return torch.stack((-x2, x1), dim=-1).flatten(-2)
 
 
-e
+class RoPE(nn.Module):
+    """Rotary Position Embedding. Applied to Q and K inside attention."""
+
+    def __init__(self, d_k: int, max_len: int = 8192, base: float = 10000.0) -> None:
+        super().__init__()
+        self.d_k = d_k
+        inv_freq = 1.0 / (base ** (torch.arange(0, d_k, 2, dtype=torch.float32) / d_k))
+        position = torch.arange(max_len, dtype=torch.float32)
+        freqs = position.unsqueeze(1) * inv_freq.unsqueeze(0)
+        cos = freqs.cos().unsqueeze(0).unsqueeze(0)
+        sin = freqs.sin().unsqueeze(0).unsqueeze(0)
+        cos = cos.repeat_interleave(2, dim=-1)
+        sin = sin.repeat_interleave(2, dim=-1)
+        self.register_buffer("cos_cached", cos)
+        self.register_buffer("sin_cached", sin)
+
+    def forward(
+        self, q: torch.Tensor, k: torch.Tensor, seq_len: int | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Apply RoPE to Q and K. Expects (B, num_heads, T, d_k)."""
+        t = q.size(2) if seq_len is None else seq_len
+        cos = self.cos_cached[:, :, :t, :].to(q.dtype)
+        sin = self.sin_cached[:, :, :t, :].to(q.dtype)
+        q_rot = q * cos + _rotate_half(q) * sin
+        k_rot = k * cos + _rotate_half(k) * sin
+        return q_rot, k_rot
 
 
 class PositionalEncoding(nn.Module):

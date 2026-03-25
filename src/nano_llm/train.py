@@ -21,6 +21,7 @@ from nano_llm.data import (
     load_wikitext_2,
     load_wikitext_103,
 )
+from nano_llm.inference.load import normalize_checkpoint_state_dict
 from nano_llm.model import build_model
 from nano_llm.tokenizer import (
     CharTokenizer,
@@ -30,6 +31,14 @@ from nano_llm.tokenizer import (
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _state_dict_for_checkpoint(model: torch.nn.Module) -> dict:
+    """Save weights without torch.compile / DDP wrapper prefixes."""
+    m = model
+    while hasattr(m, "_orig_mod"):
+        m = getattr(m, "_orig_mod")
+    return m.state_dict()
 
 
 def _configure_cuda_training(cfg: dict, device: torch.device) -> None:
@@ -239,6 +248,9 @@ def train(config: dict | None = None) -> dict:
             "weight_tie",
             "dropout",
             "position_encoding",
+            "block_attn_residuals",
+            "macro_block_size",
+            "max_block_representations",
         )
         for k in model_keys:
             if k in ckpt["config"]:
@@ -293,8 +305,11 @@ def train(config: dict | None = None) -> dict:
             dropout=float(cfg["dropout"]),
             weight_tie=cfg.get("weight_tie", True),
             position_encoding=pos_enc,
+            block_attn_residuals=bool(cfg.get("block_attn_residuals", False)),
+            macro_block_size=int(cfg.get("macro_block_size", 2)),
+            max_block_representations=int(cfg.get("max_block_representations", 9)),
         )
-        model.load_state_dict(ckpt["model"])
+        model.load_state_dict(normalize_checkpoint_state_dict(ckpt["model"]))
     else:
         model = build_model(
             vocab_size=vocab_size,
@@ -306,6 +321,9 @@ def train(config: dict | None = None) -> dict:
             dropout=float(cfg["dropout"]),
             weight_tie=cfg.get("weight_tie", True),
             position_encoding=pos_enc,
+            block_attn_residuals=bool(cfg.get("block_attn_residuals", False)),
+            macro_block_size=int(cfg.get("macro_block_size", 2)),
+            max_block_representations=int(cfg.get("max_block_representations", 9)),
         )
     model = model.to(device)
     if device.type == "cuda" and cfg.get("torch_compile", False):
@@ -430,7 +448,7 @@ def train(config: dict | None = None) -> dict:
                 epochs_since_improvement = 0
                 torch.save(
                     {
-                        "model": model.state_dict(),
+                        "model": _state_dict_for_checkpoint(model),
                         "config": cfg,
                         "vocab": tokenizer.vocab,
                         "tokenizer_state": tokenizer.to_state(),
@@ -445,7 +463,7 @@ def train(config: dict | None = None) -> dict:
                 best_val_loss = train_loss
                 torch.save(
                     {
-                        "model": model.state_dict(),
+                        "model": _state_dict_for_checkpoint(model),
                         "config": cfg,
                         "vocab": tokenizer.vocab,
                         "tokenizer_state": tokenizer.to_state(),

@@ -2,7 +2,13 @@
 
 import torch
 
-from nano_llm.layers import CausalSelfAttention, DecoderBlock, PositionalEncoding, RoPE
+from nano_llm.layers import (
+    CausalSelfAttention,
+    DecoderBlock,
+    InterBlockAttnDecoderBlock,
+    PositionalEncoding,
+    RoPE,
+)
 
 
 def test_positional_encoding_shape() -> None:
@@ -68,3 +74,18 @@ def test_decoder_block_gradient_flows() -> None:
     loss.backward()
     assert x.grad is not None
     assert not torch.isnan(x.grad).any()
+
+
+def test_inter_block_attn_decoder_block_forward() -> None:
+    layer = InterBlockAttnDecoderBlock(d_model=32, num_heads=2, d_ff=128)
+    x = torch.randn(2, 8, 32, requires_grad=True)
+    blocks = [x]
+    x2, blocks2, partial = layer(x, blocks, None, layer_index=0, macro_block_size=2)
+    assert x2.shape == (2, 8, 32)
+    assert partial is not None
+    x3, blocks3, partial2 = layer(x2, blocks2, partial, layer_index=1, macro_block_size=2)
+    assert x3.shape == (2, 8, 32)
+    assert len(blocks3) == 2
+    assert partial2 is None
+    x3.sum().backward()
+    assert x.grad is not None

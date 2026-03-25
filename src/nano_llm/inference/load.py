@@ -17,11 +17,33 @@ from nano_llm.tokenizer import (
 )
 
 
+def normalize_checkpoint_state_dict(state: dict) -> dict:
+    """Strip DDP ``module.`` and torch.compile ``_orig_mod.`` prefixes from checkpoint keys."""
+    if not state:
+        return state
+    out: dict = {}
+    for k, v in state.items():
+        key = str(k)
+        while True:
+            if key.startswith("module."):
+                key = key[7:]
+            elif key.startswith("_orig_mod."):
+                key = key[len("_orig_mod.") :]
+            else:
+                break
+        out[key] = v
+    return out
+
+
 def load_model_and_tokenizer(
     checkpoint_path: str | Path,
     device: str | torch.device | None = None,
     rebuild_tokenizer_from_shakespeare: bool = True,
-) -> tuple[torch.nn.Module, CharTokenizer | BPETokenizer | ByteBPETokenizer | HFByteBPETokenizer, dict]:
+) -> tuple[
+    torch.nn.Module,
+    CharTokenizer | BPETokenizer | ByteBPETokenizer | HFByteBPETokenizer,
+    dict,
+]:
     """Load model, tokenizer, and config from a checkpoint.
 
     If checkpoint has no 'vocab', rebuilds tokenizer from Tiny Shakespeare
@@ -83,7 +105,7 @@ def load_model_and_tokenizer(
             "Checkpoint missing 'vocab'. Retrain with updated train.py, "
             "or pass rebuild_tokenizer_from_shakespeare=True and ensure network access."
         )
-    state = ckpt["model"]
+    state = normalize_checkpoint_state_dict(ckpt["model"])
     max_len = int(cfg.get("seq_len", 128)) + 10
     if "pos_enc.pe" in state:
         max_len = state["pos_enc.pe"].shape[1]
@@ -94,6 +116,9 @@ def load_model_and_tokenizer(
         position_encoding = "rope"
     else:
         position_encoding = str(cfg.get("position_encoding", "sinusoidal")).lower()
+    block_attn_residuals = bool(cfg.get("block_attn_residuals", False)) or any(
+        "attn_res_proj" in k for k in state
+    )
     model = build_model(
         vocab_size=tokenizer.vocab_size,
         d_model=int(cfg["d_model"]),
@@ -104,6 +129,9 @@ def load_model_and_tokenizer(
         dropout=0,
         weight_tie=cfg.get("weight_tie", True),
         position_encoding=position_encoding,
+        block_attn_residuals=block_attn_residuals,
+        macro_block_size=int(cfg.get("macro_block_size", 2)),
+        max_block_representations=int(cfg.get("max_block_representations", 9)),
     )
     model.load_state_dict(state)
     model.eval()

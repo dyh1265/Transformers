@@ -28,3 +28,23 @@ def test_model_with_rope() -> None:
     x = torch.randint(0, 65, (2, 64))
     logits = model(x)
     assert logits.shape == (2, 64, 65)
+
+
+def test_model_block_attn_residuals_forward_and_grad() -> None:
+    model = build_model(
+        vocab_size=65,
+        d_model=32,
+        num_heads=2,
+        num_layers=4,
+        d_ff=128,
+        max_len=128,
+        block_attn_residuals=True,
+        macro_block_size=2,
+        max_block_representations=5,
+    )
+    x = torch.randint(0, 65, (2, 32))
+    logits = model(x)
+    assert logits.shape == (2, 32, 65)
+    loss = logits.float().mean()
+    loss.backward()
+    assert model.embed.weight.grad is not None

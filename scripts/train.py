@@ -183,6 +183,24 @@ def parse_args() -> argparse.Namespace:
         dest="torch_compile",
         help="Wrap model with torch.compile on CUDA (first epoch may be slow)",
     )
+    p.add_argument(
+        "--block-attn-residuals",
+        action="store_true",
+        dest="block_attn_residuals",
+        help="Inter-block attention residuals (mix prior macro-block reps)",
+    )
+    p.add_argument(
+        "--macro-block-size",
+        type=int,
+        dest="macro_block_size",
+        help="Decoder layers per macro block before appending a block representation",
+    )
+    p.add_argument(
+        "--max-block-representations",
+        type=int,
+        dest="max_block_representations",
+        help="Cap block history length (keeps b_0 + most recent; default 9)",
+    )
     return p.parse_args()
 
 
@@ -272,6 +290,12 @@ def main() -> None:
         overrides["cuda_prefer_flash_attn"] = False
     if args.torch_compile:
         overrides["torch_compile"] = True
+    if args.block_attn_residuals:
+        overrides["block_attn_residuals"] = True
+    if args.macro_block_size is not None:
+        overrides["macro_block_size"] = args.macro_block_size
+    if args.max_block_representations is not None:
+        overrides["max_block_representations"] = args.max_block_representations
 
     config.update(overrides)
     train(config)

@@ -6,7 +6,9 @@ __pycache__
 .coverage
 htmlcov
 .env
-*.egg-info
+# W&B uses symlinks (e.g. latest-run); Docker Desktop on Windows often cannot read them in build context
+wandb
+checkpoints
 .venv
 venv
 hpo_results/*.json

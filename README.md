@@ -257,3 +257,6 @@ This project uses **PyTorch** (NGC PyTorch container for Docker). Mixed precisio
 
 See [docs/LLM_JEPA_REFERENCE.md](docs/LLM_JEPA_REFERENCE.md) for notes on LLM-JEPA (Joint Embedding Predictive Architecture), the paper (arxiv.org/abs/2509.14252), and ideas for extending nano_llm with JEPA-style training (e.g., execution-grounded or causal multi-view JEPA).
 Implementation roadmap: [docs/JEPA_PLAN.md](docs/JEPA_PLAN.md).
+
+
+docker compose run --rm -it chat --checkpoint "checkpoints/imdb_sentiment/hf_bpe_byte/best.pt" --max-tokens 240 --temperature 0.9 --top-p 0.9 --repetition-penalty 1.15

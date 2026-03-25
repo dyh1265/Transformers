@@ -34,6 +34,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "pg19_max_val_books": None,
     "pg19_max_chars_per_book": None,
     "position_encoding": "sinusoidal",
+    # Inter-block attention residuals (mix prior macro-block reps before attn/MLP)
+    "block_attn_residuals": False,
+    "macro_block_size": 2,
+    "max_block_representations": 9,
     "weight_tie": True,
     # fp32 | fp16 (GradScaler) | bf16 (CUDA autocast, no scaler; Ampere+ friendly)
     "mixed_precision": "fp16",
