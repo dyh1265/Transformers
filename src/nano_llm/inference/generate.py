@@ -82,6 +82,7 @@ def generate(
     model: torch.nn.Module,
     tokenizer: "CharTokenizer | BPETokenizer | ByteBPETokenizer | HFByteBPETokenizer",
     prompt: str,
+    head_id: int | None = None,
     max_new_tokens: int = 100,
     max_context: int = 128,
     method: str = "greedy",
@@ -128,7 +129,10 @@ def generate(
         context = ids[-max_context:] if len(ids) > max_context else ids
         x = torch.tensor([context], dtype=torch.long, device=device)
         with torch.no_grad():
-            logits = model(x)[0, -1]
+            if hasattr(model, "tarnet_two_heads") and getattr(model, "tarnet_two_heads"):
+                logits = model(x, head_id=head_id)[0, -1]
+            else:
+                logits = model(x)[0, -1]
 
         if temperature != 1.0 and temperature > 0:
             logits = logits / temperature
@@ -160,3 +164,139 @@ def generate(
     if sanitize:
         out = sanitize_output(out)
     return out
+
+
+def generate_both_heads(
+    model: torch.nn.Module,
+    tokenizer: "CharTokenizer | BPETokenizer | ByteBPETokenizer | HFByteBPETokenizer",
+    prompt: str,
+    *,
+    max_new_tokens: int = 100,
+    max_context: int = 128,
+    method: str = "greedy",
+    top_k: int = 40,
+    top_p: float = 0.9,
+    temperature: float = 1.0,
+    repetition_penalty: float = 1.0,
+    stop_at_newline: bool = True,
+    stop_sequence: str | None = None,
+    seed: int | None = None,
+    device: torch.device | str | None = None,
+    sanitize: bool = True,
+) -> tuple[str, str]:
+    """Generate Y0 and Y1 from a TARNet two-head model.
+
+    Guarantees that when both branches have identical context, logits for both
+    heads are computed from the same trunk hidden state in a single forward pass.
+    After the sampled tokens diverge, the branches decode independently.
+    """
+    if not (hasattr(model, "tarnet_two_heads") and getattr(model, "tarnet_two_heads")):
+        raise ValueError(
+            "generate_both_heads requires a TARNet two-head model "
+            "(train with --tarnet-two-heads, then load that checkpoint)."
+        )
+    if seed is not None:
+        torch.manual_seed(seed)
+    if device is None:
+        device = next(model.parameters()).device
+
+    ids0 = list(tokenizer.encode(prompt))
+    ids1 = list(tokenizer.encode(prompt))
+    vocab_size = tokenizer.vocab_size
+
+    def stopped(ids: list[int], next_id: int) -> bool:
+        if stop_at_newline and next_id < vocab_size:
+            token_text = tokenizer.decode([next_id])
+            if "\n" in token_text:
+                return True
+        if stop_sequence:
+            decoded = tokenizer.decode(ids)
+            if stop_sequence in decoded:
+                return True
+        return False
+
+    done0 = False
+    done1 = False
+
+    for _ in range(max_new_tokens):
+        if done0 and done1:
+            break
+
+        same_context = (not done0) and (not done1) and (ids0 == ids1)
+        if same_context:
+            context = ids0[-max_context:] if len(ids0) > max_context else ids0
+            x = torch.tensor([context], dtype=torch.long, device=device)
+            with torch.no_grad():
+                logits0, logits1 = model(x, return_both_heads=True)
+                l0 = logits0[0, -1]
+                l1 = logits1[0, -1]
+
+            if temperature != 1.0 and temperature > 0:
+                l0 = l0 / temperature
+                l1 = l1 / temperature
+
+            l0 = _apply_repetition_penalty(l0.clone(), ids0, repetition_penalty)
+            l1 = _apply_repetition_penalty(l1.clone(), ids1, repetition_penalty)
+
+            if method == "greedy":
+                n0 = _greedy_sample(l0)
+                n1 = _greedy_sample(l1)
+            elif method == "top_k":
+                n0 = _top_k_sample(l0, top_k)
+                n1 = _top_k_sample(l1, top_k)
+            elif method == "top_p":
+                n0 = _top_p_sample(l0, top_p)
+                n1 = _top_p_sample(l1, top_p)
+            else:
+                raise ValueError(f"Unknown method: {method}. Use greedy, top_k, or top_p.")
+
+            ids0.append(n0)
+            ids1.append(n1)
+            done0 = stopped(ids0, n0)
+            done1 = stopped(ids1, n1)
+            continue
+
+        if not done0:
+            context0 = ids0[-max_context:] if len(ids0) > max_context else ids0
+            x0 = torch.tensor([context0], dtype=torch.long, device=device)
+            with torch.no_grad():
+                l0 = model(x0, head_id=0)[0, -1]
+            if temperature != 1.0 and temperature > 0:
+                l0 = l0 / temperature
+            l0 = _apply_repetition_penalty(l0.clone(), ids0, repetition_penalty)
+            if method == "greedy":
+                n0 = _greedy_sample(l0)
+            elif method == "top_k":
+                n0 = _top_k_sample(l0, top_k)
+            elif method == "top_p":
+                n0 = _top_p_sample(l0, top_p)
+            else:
+                raise ValueError(f"Unknown method: {method}. Use greedy, top_k, or top_p.")
+            ids0.append(n0)
+            done0 = stopped(ids0, n0)
+
+        if not done1:
+            context1 = ids1[-max_context:] if len(ids1) > max_context else ids1
+            x1 = torch.tensor([context1], dtype=torch.long, device=device)
+            with torch.no_grad():
+                l1 = model(x1, head_id=1)[0, -1]
+            if temperature != 1.0 and temperature > 0:
+                l1 = l1 / temperature
+            l1 = _apply_repetition_penalty(l1.clone(), ids1, repetition_penalty)
+            if method == "greedy":
+                n1 = _greedy_sample(l1)
+            elif method == "top_k":
+                n1 = _top_k_sample(l1, top_k)
+            elif method == "top_p":
+                n1 = _top_p_sample(l1, top_p)
+            else:
+                raise ValueError(f"Unknown method: {method}. Use greedy, top_k, or top_p.")
+            ids1.append(n1)
+            done1 = stopped(ids1, n1)
+
+    out0 = tokenizer.decode(ids0)
+    out1 = tokenizer.decode(ids1)
+    if sanitize:
+        out0 = sanitize_output(out0)
+        out1 = sanitize_output(out1)
+    return out0, out1

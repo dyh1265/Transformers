@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from nano_llm.inference import generate as gen_fn
+from nano_llm.inference import generate_both_heads as gen_both_fn
 from nano_llm.inference import load_model_and_tokenizer
 
 
@@ -27,6 +28,17 @@ def main() -> int:
         type=str,
         default="ROMEO:",
         help="Starting prompt",
+    )
+    parser.add_argument(
+        "--head-id",
+        type=int,
+        default=None,
+        help="TARNet two-head models: choose head 0 (Y0) or 1 (Y1). Default: 0.",
+    )
+    parser.add_argument(
+        "--both-heads",
+        action="store_true",
+        help="TARNet two-head models: generate and print both Y0 and Y1 in one run",
     )
     parser.add_argument(
         "--max-tokens",
@@ -110,23 +122,50 @@ def main() -> int:
     )
     max_context = args.max_context if args.max_context is not None else int(config.get("seq_len", 128))
 
-    out = gen_fn(
-        model,
-        tokenizer,
-        prompt=args.prompt,
-        max_new_tokens=args.max_tokens,
-        max_context=max_context,
-        method=args.method,
-        top_k=args.top_k,
-        top_p=args.top_p,
-        temperature=args.temperature,
-        repetition_penalty=args.repetition_penalty,
-        seed=args.seed,
-        stop_at_newline=not args.no_stop_newline,
-        stop_sequence=args.stop_sequence,
-        sanitize=not args.no_sanitize,
-    )
-    print(out)
+    if args.both_heads:
+        if not (hasattr(model, "tarnet_two_heads") and getattr(model, "tarnet_two_heads")):
+            print(
+                "Error: --both-heads requires a TARNet two-head checkpoint "
+                "(train with --tarnet-two-heads).",
+                file=sys.stderr,
+            )
+            return 2
+        out0, out1 = gen_both_fn(
+            model,
+            tokenizer,
+            prompt=args.prompt,
+            max_new_tokens=args.max_tokens,
+            max_context=max_context,
+            method=args.method,
+            top_k=args.top_k,
+            top_p=args.top_p,
+            temperature=args.temperature,
+            repetition_penalty=args.repetition_penalty,
+            seed=args.seed,
+            stop_at_newline=not args.no_stop_newline,
+            stop_sequence=args.stop_sequence,
+            sanitize=not args.no_sanitize,
+        )
+        print("[Y0]\n" + out0 + "\n\n[Y1]\n" + out1)
+    else:
+        out = gen_fn(
+            model,
+            tokenizer,
+            prompt=args.prompt,
+            head_id=args.head_id,
+            max_new_tokens=args.max_tokens,
+            max_context=max_context,
+            method=args.method,
+            top_k=args.top_k,
+            top_p=args.top_p,
+            temperature=args.temperature,
+            repetition_penalty=args.repetition_penalty,
+            seed=args.seed,
+            stop_at_newline=not args.no_stop_newline,
+            stop_sequence=args.stop_sequence,
+            sanitize=not args.no_sanitize,
+        )
+        print(out)
     return 0
 
 

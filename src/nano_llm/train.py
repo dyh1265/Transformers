@@ -9,6 +9,13 @@ import time
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
+try:
+    from tqdm.auto import tqdm
+except ImportError:  # pragma: no cover
+    # Fallback when tqdm isn't installed; keeps training functional.
+    def tqdm(x, **kwargs):
+        return x
 
 from nano_llm.config import DEFAULT_CONFIG
 from nano_llm.data import (
@@ -147,6 +154,28 @@ def _comparison_metrics(
     }
 
 
+def _masked_mean_pool(hidden: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """Mean-pool hidden states over True mask positions (fallback to denominator=1)."""
+    mask_f = mask.to(dtype=hidden.dtype).unsqueeze(-1)
+    denom = mask_f.sum(dim=1).clamp_min(1.0)
+    return (hidden * mask_f).sum(dim=1) / denom
+
+
+def _js_divergence_from_logits(
+    logits_p: torch.Tensor, logits_q: torch.Tensor, *, eps: float = 1e-12
+) -> torch.Tensor:
+    """Jensen–Shannon divergence per position from logits.
+
+    Returns JS(p||q) with natural logs, shape: logits_p.shape[:-1].
+    """
+    p = torch.softmax(logits_p, dim=-1).clamp_min(eps)
+    q = torch.softmax(logits_q, dim=-1).clamp_min(eps)
+    m = 0.5 * (p + q)
+    kl_pm = (p * (p.log() - m.log())).sum(dim=-1)
+    kl_qm = (q * (q.log() - m.log())).sum(dim=-1)
+    return 0.5 * (kl_pm + kl_qm)
+
+
 def train(config: dict | None = None) -> dict:
     """Run training. Returns results dict for HPO."""
     cfg = config or dict(DEFAULT_CONFIG)
@@ -184,6 +213,7 @@ def train(config: dict | None = None) -> dict:
             max_train_samples=cfg.get("imdb_max_train_samples"),
             max_val_samples=cfg.get("imdb_max_val_samples"),
             max_review_chars=cfg.get("imdb_max_review_chars"),
+            subset_seed=int(cfg.get("seed", 42)),
         )
         train_text = "\n".join(train_samples)
         val_text = "\n".join(val_samples)
@@ -291,6 +321,8 @@ def train(config: dict | None = None) -> dict:
         batch_size=batch_size,
         train_samples=train_samples if dataset_id == "imdb_sentiment" else None,
         val_samples=val_samples if dataset_id == "imdb_sentiment" else None,
+        imdb_tarnet_two_heads=bool(cfg.get("tarnet_two_heads", False)),
+        imdb_tarnet_command_prompt=str(cfg.get("imdb_tarnet_command_prompt", "GENERATE an IMDB-like review:")),
     )
 
     pos_enc = str(cfg.get("position_encoding", "sinusoidal")).lower()
@@ -304,6 +336,13 @@ def train(config: dict | None = None) -> dict:
             max_len=seq_len + 10,
             dropout=float(cfg["dropout"]),
             weight_tie=cfg.get("weight_tie", True),
+            tarnet_two_heads=bool(cfg.get("tarnet_two_heads", False)),
+            tarnet_head_n_fc=int(cfg.get("tarnet_head_n_fc", 2)),
+            tarnet_head_hidden_dim=cfg.get("tarnet_head_hidden_dim"),
+            tarnet_head0_n_fc=cfg.get("tarnet_head0_n_fc"),
+            tarnet_head0_hidden_dim=cfg.get("tarnet_head0_hidden_dim"),
+            tarnet_head1_n_fc=cfg.get("tarnet_head1_n_fc"),
+            tarnet_head1_hidden_dim=cfg.get("tarnet_head1_hidden_dim"),
             position_encoding=pos_enc,
             block_attn_residuals=bool(cfg.get("block_attn_residuals", False)),
             macro_block_size=int(cfg.get("macro_block_size", 2)),
@@ -320,6 +359,13 @@ def train(config: dict | None = None) -> dict:
             max_len=seq_len + 10,
             dropout=float(cfg["dropout"]),
             weight_tie=cfg.get("weight_tie", True),
+            tarnet_two_heads=bool(cfg.get("tarnet_two_heads", False)),
+            tarnet_head_n_fc=int(cfg.get("tarnet_head_n_fc", 2)),
+            tarnet_head_hidden_dim=cfg.get("tarnet_head_hidden_dim"),
+            tarnet_head0_n_fc=cfg.get("tarnet_head0_n_fc"),
+            tarnet_head0_hidden_dim=cfg.get("tarnet_head0_hidden_dim"),
+            tarnet_head1_n_fc=cfg.get("tarnet_head1_n_fc"),
+            tarnet_head1_hidden_dim=cfg.get("tarnet_head1_hidden_dim"),
             position_encoding=pos_enc,
             block_attn_residuals=bool(cfg.get("block_attn_residuals", False)),
             macro_block_size=int(cfg.get("macro_block_size", 2)),
@@ -366,8 +412,19 @@ def train(config: dict | None = None) -> dict:
     else:
         scheduler = None
     criterion = torch.nn.CrossEntropyLoss(ignore_index=PAD_TARGET_IGNORE_INDEX)
+    enable_counterfactual_objective = bool(cfg.get("enable_counterfactual_objective", False))
+    if enable_counterfactual_objective and dataset_id != "imdb_sentiment":
+        logger.warning(
+            "enable_counterfactual_objective is only supported for imdb_sentiment; disabling."
+        )
+        enable_counterfactual_objective = False
+    counterfactual_ce_weight = float(cfg.get("counterfactual_ce_weight", 1.0))
+    counterfactual_embedding_weight = float(cfg.get("counterfactual_embedding_weight", 0.25))
+    tarnet_head_separation_weight = float(cfg.get("tarnet_head_separation_weight", 0.0))
 
     ckpt_dir = Path(cfg.get("checkpoint_dir", "checkpoints"))
+    if enable_counterfactual_objective and dataset_id == "imdb_sentiment":
+        ckpt_dir = ckpt_dir / "counterfactual"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     ckpt_path = ckpt_dir / "best.pt"
 
@@ -403,13 +460,109 @@ def train(config: dict | None = None) -> dict:
     for epoch in range(epochs):
         model.train()
         train_loss = 0.0
-        for x, y in train_loader:
-            x, y = x.to(device), y.to(device)
+        train_loss_ce = 0.0
+        train_loss_emb = 0.0
+        train_loss_cf_weighted = 0.0
+        tarnet_two_heads = bool(cfg.get("tarnet_two_heads", False))
+        for batch in tqdm(
+            train_loader,
+            desc=f"Epoch {epoch + 1}/{epochs} [train]",
+            total=len(train_loader),
+            leave=False,
+        ):
+            batch_has_cf = (
+                enable_counterfactual_objective
+                and isinstance(batch, (tuple, list))
+                and len(batch) == 8
+            )
+            batch_has_tarnet = (
+                enable_counterfactual_objective
+                and tarnet_two_heads
+                and isinstance(batch, (tuple, list))
+                and len(batch) == 4
+            )
+            if batch_has_cf:
+                x, y, treatment, review_mask, x_pos, x_neg, review_mask_pos, review_mask_neg = batch
+                x = x.to(device)
+                y = y.to(device)
+                treatment = treatment.to(device)
+                review_mask = review_mask.to(device)
+                x_pos = x_pos.to(device)
+                x_neg = x_neg.to(device)
+                review_mask_pos = review_mask_pos.to(device)
+                review_mask_neg = review_mask_neg.to(device)
+            elif batch_has_tarnet:
+                x, y, treatment, review_mask = batch
+                x = x.to(device)
+                y = y.to(device)
+                treatment = treatment.to(device)
+                review_mask = review_mask.to(device)
+            else:
+                x = batch[0]
+                y = batch[1]
+                x = x.to(device)
+                y = y.to(device)
             optimizer.zero_grad()
             if use_cuda_amp:
                 with torch.amp.autocast("cuda", dtype=amp_dtype):
-                    logits = model(x)
-                    loss = criterion(logits.view(-1, vocab_size), y.view(-1))
+                    if batch_has_tarnet:
+                        logits0, logits1, hidden = model(
+                            x, return_both_heads=True, return_hidden=True
+                        )
+                        # Per-example CE for treatment-weighting
+                        bsz, seqlen, _ = logits0.shape
+                        y_flat = y.reshape(-1)
+                        valid = (y_flat != PAD_TARGET_IGNORE_INDEX).reshape(bsz, seqlen)
+                        loss0_tok = F.cross_entropy(
+                            logits0.reshape(-1, vocab_size),
+                            y_flat,
+                            ignore_index=PAD_TARGET_IGNORE_INDEX,
+                            reduction="none",
+                        ).reshape(bsz, seqlen)
+                        loss1_tok = F.cross_entropy(
+                            logits1.reshape(-1, vocab_size),
+                            y_flat,
+                            ignore_index=PAD_TARGET_IGNORE_INDEX,
+                            reduction="none",
+                        ).reshape(bsz, seqlen)
+                        denom = valid.sum(dim=1).clamp_min(1)
+                        ce0 = (loss0_tok * valid).sum(dim=1) / denom
+                        ce1 = (loss1_tok * valid).sum(dim=1) / denom
+                        t = treatment.to(dtype=ce0.dtype)
+                        ce_loss = ((1.0 - t) * ce0 + t * ce1).mean()
+                        # Head separation: encourage head0 and head1 to differ (avoid collapse).
+                        sep_loss = torch.tensor(0.0, device=device)
+                        if tarnet_head_separation_weight > 0:
+                            js = _js_divergence_from_logits(logits0, logits1)
+                            sep_loss = -(
+                                (js * valid.to(dtype=js.dtype)).sum() / valid.sum().clamp_min(1)
+                            )
+                        emb_loss = torch.tensor(0.0, device=device)
+                        cf_weighted = emb_loss
+                        loss = ce_loss + tarnet_head_separation_weight * sep_loss
+                    elif batch_has_cf:
+                        logits_f, hidden_f = model(x, return_hidden=True)
+                        logits_pos, hidden_pos = model(x_pos, return_hidden=True)
+                        logits_neg, hidden_neg = model(x_neg, return_hidden=True)
+                        ce_loss = criterion(logits_f.view(-1, vocab_size), y.view(-1))
+                        factual_emb = _masked_mean_pool(hidden_f, review_mask)
+                        pos_emb = _masked_mean_pool(hidden_pos, review_mask_pos)
+                        neg_emb = _masked_mean_pool(hidden_neg, review_mask_neg)
+                        loss_pos = 1.0 - F.cosine_similarity(pos_emb, factual_emb, dim=-1)
+                        loss_neg = 1.0 - F.cosine_similarity(neg_emb, factual_emb, dim=-1)
+                        treatment_f = treatment.to(dtype=factual_emb.dtype)
+                        cf_weighted = ((1.0 - treatment_f) * loss_neg + treatment_f * loss_pos).mean()
+                        emb_loss = cf_weighted
+                        loss = (
+                            counterfactual_ce_weight * ce_loss
+                            + counterfactual_embedding_weight * cf_weighted
+                        )
+                    else:
+                        logits = model(x)
+                        ce_loss = criterion(logits.view(-1, vocab_size), y.view(-1))
+                        emb_loss = torch.tensor(0.0, device=device)
+                        cf_weighted = emb_loss
+                        loss = ce_loss
                 if scaler is not None:
                     scaler.scale(loss).backward()
                     scaler.step(optimizer)
@@ -418,30 +571,248 @@ def train(config: dict | None = None) -> dict:
                     loss.backward()
                     optimizer.step()
             else:
-                logits = model(x)
-                loss = criterion(logits.view(-1, vocab_size), y.view(-1))
+                if batch_has_tarnet:
+                    logits0, logits1, hidden = model(
+                        x, return_both_heads=True, return_hidden=True
+                    )
+                    bsz, seqlen, _ = logits0.shape
+                    y_flat = y.reshape(-1)
+                    valid = (y_flat != PAD_TARGET_IGNORE_INDEX).reshape(bsz, seqlen)
+                    loss0_tok = F.cross_entropy(
+                        logits0.reshape(-1, vocab_size),
+                        y_flat,
+                        ignore_index=PAD_TARGET_IGNORE_INDEX,
+                        reduction="none",
+                    ).reshape(bsz, seqlen)
+                    loss1_tok = F.cross_entropy(
+                        logits1.reshape(-1, vocab_size),
+                        y_flat,
+                        ignore_index=PAD_TARGET_IGNORE_INDEX,
+                        reduction="none",
+                    ).reshape(bsz, seqlen)
+                    denom = valid.sum(dim=1).clamp_min(1)
+                    ce0 = (loss0_tok * valid).sum(dim=1) / denom
+                    ce1 = (loss1_tok * valid).sum(dim=1) / denom
+                    t = treatment.to(dtype=ce0.dtype)
+                    ce_loss = ((1.0 - t) * ce0 + t * ce1).mean()
+                    sep_loss = torch.tensor(0.0, device=device)
+                    if tarnet_head_separation_weight > 0:
+                        js = _js_divergence_from_logits(logits0, logits1)
+                        sep_loss = -(
+                            (js * valid.to(dtype=js.dtype)).sum() / valid.sum().clamp_min(1)
+                        )
+                    emb_loss = torch.tensor(0.0, device=device)
+                    cf_weighted = emb_loss
+                    loss = ce_loss + tarnet_head_separation_weight * sep_loss
+                elif batch_has_cf:
+                    logits_f, hidden_f = model(x, return_hidden=True)
+                    logits_pos, hidden_pos = model(x_pos, return_hidden=True)
+                    logits_neg, hidden_neg = model(x_neg, return_hidden=True)
+                    ce_loss = criterion(logits_f.view(-1, vocab_size), y.view(-1))
+                    factual_emb = _masked_mean_pool(hidden_f, review_mask)
+                    pos_emb = _masked_mean_pool(hidden_pos, review_mask_pos)
+                    neg_emb = _masked_mean_pool(hidden_neg, review_mask_neg)
+                    loss_pos = 1.0 - F.cosine_similarity(pos_emb, factual_emb, dim=-1)
+                    loss_neg = 1.0 - F.cosine_similarity(neg_emb, factual_emb, dim=-1)
+                    treatment_f = treatment.to(dtype=factual_emb.dtype)
+                    cf_weighted = ((1.0 - treatment_f) * loss_neg + treatment_f * loss_pos).mean()
+                    emb_loss = cf_weighted
+                    loss = (
+                        counterfactual_ce_weight * ce_loss
+                        + counterfactual_embedding_weight * cf_weighted
+                    )
+                else:
+                    logits = model(x)
+                    ce_loss = criterion(logits.view(-1, vocab_size), y.view(-1))
+                    emb_loss = torch.tensor(0.0, device=device)
+                    cf_weighted = emb_loss
+                    loss = ce_loss
                 loss.backward()
                 optimizer.step()
             train_loss += loss.item() * x.size(0)
+            train_loss_ce += ce_loss.item() * x.size(0)
+            train_loss_emb += emb_loss.item() * x.size(0)
+            train_loss_cf_weighted += cf_weighted.item() * x.size(0)
         train_loss /= len(train_loader.dataset)
+        train_loss_ce /= len(train_loader.dataset)
+        train_loss_emb /= len(train_loader.dataset)
+        train_loss_cf_weighted /= len(train_loader.dataset)
         history["loss"].append(train_loss)
 
         val_loss = train_loss
+        val_loss_ce = train_loss_ce
+        val_loss_emb = train_loss_emb
+        val_loss_cf_weighted = train_loss_cf_weighted
         if val_loader is not None:
             model.eval()
             val_loss = 0.0
+            val_loss_ce = 0.0
+            val_loss_emb = 0.0
+            val_loss_cf_weighted = 0.0
             with torch.no_grad():
-                for x, y in val_loader:
-                    x, y = x.to(device), y.to(device)
+                for batch in tqdm(
+                    val_loader,
+                    desc=f"Epoch {epoch + 1}/{epochs} [val]",
+                    total=len(val_loader),
+                    leave=False,
+                ):
+                    batch_has_cf = (
+                        enable_counterfactual_objective
+                        and isinstance(batch, (tuple, list))
+                        and len(batch) == 8
+                    )
+                    batch_has_tarnet = (
+                        enable_counterfactual_objective
+                        and bool(cfg.get("tarnet_two_heads", False))
+                        and isinstance(batch, (tuple, list))
+                        and len(batch) == 4
+                    )
+                    if batch_has_cf:
+                        x, y, treatment, review_mask, x_pos, x_neg, review_mask_pos, review_mask_neg = batch
+                        x = x.to(device)
+                        y = y.to(device)
+                        treatment = treatment.to(device)
+                        review_mask = review_mask.to(device)
+                        x_pos = x_pos.to(device)
+                        x_neg = x_neg.to(device)
+                        review_mask_pos = review_mask_pos.to(device)
+                        review_mask_neg = review_mask_neg.to(device)
+                    elif batch_has_tarnet:
+                        x, y, treatment, review_mask = batch
+                        x = x.to(device)
+                        y = y.to(device)
+                        treatment = treatment.to(device)
+                        review_mask = review_mask.to(device)
+                    else:
+                        x = batch[0]
+                        y = batch[1]
+                        x = x.to(device)
+                        y = y.to(device)
                     if use_cuda_amp:
                         with torch.amp.autocast("cuda", dtype=amp_dtype):
-                            logits = model(x)
-                            loss = criterion(logits.view(-1, vocab_size), y.view(-1))
+                            if batch_has_tarnet:
+                                logits0, logits1, hidden = model(
+                                    x, return_both_heads=True, return_hidden=True
+                                )
+                                bsz, seqlen, _ = logits0.shape
+                                y_flat = y.reshape(-1)
+                                valid = (y_flat != PAD_TARGET_IGNORE_INDEX).reshape(bsz, seqlen)
+                                loss0_tok = F.cross_entropy(
+                                    logits0.reshape(-1, vocab_size),
+                                    y_flat,
+                                    ignore_index=PAD_TARGET_IGNORE_INDEX,
+                                    reduction="none",
+                                ).reshape(bsz, seqlen)
+                                loss1_tok = F.cross_entropy(
+                                    logits1.reshape(-1, vocab_size),
+                                    y_flat,
+                                    ignore_index=PAD_TARGET_IGNORE_INDEX,
+                                    reduction="none",
+                                ).reshape(bsz, seqlen)
+                                denom = valid.sum(dim=1).clamp_min(1)
+                                ce0 = (loss0_tok * valid).sum(dim=1) / denom
+                                ce1 = (loss1_tok * valid).sum(dim=1) / denom
+                                t = treatment.to(dtype=ce0.dtype)
+                                ce_loss = ((1.0 - t) * ce0 + t * ce1).mean()
+                                sep_loss = torch.tensor(0.0, device=device)
+                                if tarnet_head_separation_weight > 0:
+                                    js = _js_divergence_from_logits(logits0, logits1)
+                                    sep_loss = -(
+                                        (js * valid.to(dtype=js.dtype)).sum()
+                                        / valid.sum().clamp_min(1)
+                                    )
+                                emb_loss = torch.tensor(0.0, device=device)
+                                cf_weighted = emb_loss
+                                loss = ce_loss + tarnet_head_separation_weight * sep_loss
+                            elif batch_has_cf:
+                                logits_f, hidden_f = model(x, return_hidden=True)
+                                logits_pos, hidden_pos = model(x_pos, return_hidden=True)
+                                logits_neg, hidden_neg = model(x_neg, return_hidden=True)
+                                ce_loss = criterion(logits_f.view(-1, vocab_size), y.view(-1))
+                                factual_emb = _masked_mean_pool(hidden_f, review_mask)
+                                pos_emb = _masked_mean_pool(hidden_pos, review_mask_pos)
+                                neg_emb = _masked_mean_pool(hidden_neg, review_mask_neg)
+                                loss_pos = 1.0 - F.cosine_similarity(pos_emb, factual_emb, dim=-1)
+                                loss_neg = 1.0 - F.cosine_similarity(neg_emb, factual_emb, dim=-1)
+                                treatment_f = treatment.to(dtype=factual_emb.dtype)
+                                cf_weighted = ((1.0 - treatment_f) * loss_neg + treatment_f * loss_pos).mean()
+                                emb_loss = cf_weighted
+                                loss = (
+                                    counterfactual_ce_weight * ce_loss
+                                    + counterfactual_embedding_weight * cf_weighted
+                                )
+                            else:
+                                logits = model(x)
+                                ce_loss = criterion(logits.view(-1, vocab_size), y.view(-1))
+                                emb_loss = torch.tensor(0.0, device=device)
+                                cf_weighted = emb_loss
+                                loss = ce_loss
                     else:
-                        logits = model(x)
-                        loss = criterion(logits.view(-1, vocab_size), y.view(-1))
+                        if batch_has_tarnet:
+                            logits0, logits1, hidden = model(
+                                x, return_both_heads=True, return_hidden=True
+                            )
+                            bsz, seqlen, _ = logits0.shape
+                            y_flat = y.reshape(-1)
+                            valid = (y_flat != PAD_TARGET_IGNORE_INDEX).reshape(bsz, seqlen)
+                            loss0_tok = F.cross_entropy(
+                                logits0.reshape(-1, vocab_size),
+                                y_flat,
+                                ignore_index=PAD_TARGET_IGNORE_INDEX,
+                                reduction="none",
+                            ).reshape(bsz, seqlen)
+                            loss1_tok = F.cross_entropy(
+                                logits1.reshape(-1, vocab_size),
+                                y_flat,
+                                ignore_index=PAD_TARGET_IGNORE_INDEX,
+                                reduction="none",
+                            ).reshape(bsz, seqlen)
+                            denom = valid.sum(dim=1).clamp_min(1)
+                            ce0 = (loss0_tok * valid).sum(dim=1) / denom
+                            ce1 = (loss1_tok * valid).sum(dim=1) / denom
+                            t = treatment.to(dtype=ce0.dtype)
+                            ce_loss = ((1.0 - t) * ce0 + t * ce1).mean()
+                            sep_loss = torch.tensor(0.0, device=device)
+                            if tarnet_head_separation_weight > 0:
+                                js = _js_divergence_from_logits(logits0, logits1)
+                                sep_loss = -(
+                                    (js * valid.to(dtype=js.dtype)).sum()
+                                    / valid.sum().clamp_min(1)
+                                )
+                            emb_loss = torch.tensor(0.0, device=device)
+                            cf_weighted = emb_loss
+                            loss = ce_loss + tarnet_head_separation_weight * sep_loss
+                        elif batch_has_cf:
+                            logits_f, hidden_f = model(x, return_hidden=True)
+                            logits_pos, hidden_pos = model(x_pos, return_hidden=True)
+                            logits_neg, hidden_neg = model(x_neg, return_hidden=True)
+                            ce_loss = criterion(logits_f.view(-1, vocab_size), y.view(-1))
+                            factual_emb = _masked_mean_pool(hidden_f, review_mask)
+                            pos_emb = _masked_mean_pool(hidden_pos, review_mask_pos)
+                            neg_emb = _masked_mean_pool(hidden_neg, review_mask_neg)
+                            loss_pos = 1.0 - F.cosine_similarity(pos_emb, factual_emb, dim=-1)
+                            loss_neg = 1.0 - F.cosine_similarity(neg_emb, factual_emb, dim=-1)
+                            treatment_f = treatment.to(dtype=factual_emb.dtype)
+                            cf_weighted = ((1.0 - treatment_f) * loss_neg + treatment_f * loss_pos).mean()
+                            emb_loss = cf_weighted
+                            loss = (
+                                counterfactual_ce_weight * ce_loss
+                                + counterfactual_embedding_weight * cf_weighted
+                            )
+                        else:
+                            logits = model(x)
+                            ce_loss = criterion(logits.view(-1, vocab_size), y.view(-1))
+                            emb_loss = torch.tensor(0.0, device=device)
+                            cf_weighted = emb_loss
+                            loss = ce_loss
                     val_loss += loss.item() * x.size(0)
+                    val_loss_ce += ce_loss.item() * x.size(0)
+                    val_loss_emb += emb_loss.item() * x.size(0)
+                    val_loss_cf_weighted += cf_weighted.item() * x.size(0)
             val_loss /= len(val_loader.dataset)
+            val_loss_ce /= len(val_loader.dataset)
+            val_loss_emb /= len(val_loader.dataset)
+            val_loss_cf_weighted /= len(val_loader.dataset)
             history["val_loss"].append(val_loss)
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
@@ -490,7 +861,8 @@ def train(config: dict | None = None) -> dict:
             (
                 f"Epoch {epoch + 1}/{epochs} train_loss={train_loss:.4f} "
                 f"val_loss={val_loss:.4f} val_ppl={val_metrics['perplexity']:.2f} "
-                f"val_bpb={val_metrics['bits_per_byte']:.3f} lr={current_lr:.2e}"
+                f"val_bpb={val_metrics['bits_per_byte']:.3f} "
+                f"train_ce={train_loss_ce:.4f} val_ce={val_loss_ce:.4f} lr={current_lr:.2e}"
             )
         )
 
@@ -503,8 +875,14 @@ def train(config: dict | None = None) -> dict:
                         "epoch": epoch + 1,
                         "train/loss": train_loss,
                         "train/perplexity": train_metrics["perplexity"],
+                        "train/loss_ce": train_loss_ce,
+                        "train/loss_emb": train_loss_emb,
+                        "train/loss_cf_weighted": train_loss_cf_weighted,
                         "val/loss": val_loss,
                         "val/perplexity": val_metrics["perplexity"],
+                        "val/loss_ce": val_loss_ce,
+                        "val/loss_emb": val_loss_emb,
+                        "val/loss_cf_weighted": val_loss_cf_weighted,
                         "val/bits_per_byte": val_metrics["bits_per_byte"],
                         "lr": current_lr,
                         "best_val_loss": best_val_loss,

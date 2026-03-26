@@ -159,6 +159,33 @@ docker compose run --rm train python scripts/train.py \
   --checkpoint-dir checkpoints/imdb_sentiment/hf_bpe_byte --early-stopping-patience 5
 ```
 
+### IMDB Counterfactual Embedding Objective
+
+For sentiment-conditioned factual/counterfactual branch training, enable:
+
+- `--enable-counterfactual-objective`
+- `--counterfactual-ce-weight` (default `1.0`)
+- `--counterfactual-embedding-weight` (default `0.25`)
+
+Loss:
+
+`L_total = ce_weight * L_ce + emb_weight * ((1 - T) * L_neg + T * L_pos)`
+
+- `T`: treatment from factual sentiment (`negative=0`, `positive=1`)
+- `L_pos`, `L_neg`: cosine embedding losses between factual review embedding and the positive/negative branch embeddings
+
+Example:
+
+```bash
+python scripts/train.py \
+  --dataset-id imdb_sentiment \
+  --tokenizer-type hf_bpe_byte --bpe-vocab-size 256 \
+  --enable-counterfactual-objective \
+  --counterfactual-ce-weight 1.0 \
+  --counterfactual-embedding-weight 0.25 \
+  --epochs 10
+```
+
 ## HPO Agent (Local Qwen)
 
 1. Install and run Ollama: `ollama pull llama3.2:1b && ollama run llama3.2:1b` (or run as server)

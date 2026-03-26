@@ -52,6 +52,34 @@ def main() -> None:
         help="Output directory for HPO artifacts (default: hpo_results/<dataset_id>/<tokenizer_type>)",
     )
     p.add_argument("--8gb", dest="use_8gb", action="store_true", help="Use 8GB GPU bounds")
+    p.add_argument(
+        "--imdb-max-train-samples",
+        type=int,
+        default=None,
+        help="(IMDB) Limit train samples for faster HPO",
+    )
+    p.add_argument(
+        "--imdb-max-val-samples",
+        type=int,
+        default=None,
+        help="(IMDB) Limit val samples for faster HPO",
+    )
+    p.add_argument(
+        "--enable-counterfactual-objective",
+        action="store_true",
+        help="Enable counterfactual objective during HPO trials",
+    )
+    p.add_argument(
+        "--tarnet-two-heads",
+        action="store_true",
+        help="Enable TARNet two-head architecture during HPO trials",
+    )
+    p.add_argument(
+        "--fixed-epochs",
+        type=int,
+        default=None,
+        help="Force all HPO trials to use this epochs value (overrides LLM proposals)",
+    )
     args = p.parse_args()
     tune(
         max_trials=args.max_trials,
@@ -65,6 +93,11 @@ def main() -> None:
         bpe_vocab_size=args.bpe_vocab_size,
         bpe_word_boundary_aware=True if args.bpe_word_boundary_aware else None,
         results_dir=args.results_dir,
+        imdb_max_train_samples=args.imdb_max_train_samples,
+        imdb_max_val_samples=args.imdb_max_val_samples,
+        enable_counterfactual_objective=True if args.enable_counterfactual_objective else None,
+        tarnet_two_heads=True if args.tarnet_two_heads else None,
+        fixed_epochs=args.fixed_epochs,
     )
 
 

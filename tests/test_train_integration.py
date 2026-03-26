@@ -7,10 +7,12 @@ import pytest
 import torch
 
 from nano_llm.config import DEFAULT_CONFIG
+from nano_llm.data import format_imdb_example
 from nano_llm.data import create_dataloaders, load_tiny_shakespeare
 from nano_llm.model import build_model
 from nano_llm.tokenizer import CharTokenizer
 from nano_llm.train import train
+import nano_llm.train as train_module
 
 
 @pytest.mark.integration
@@ -60,3 +62,40 @@ def test_checkpoint_save_and_load() -> None:
         out1 = model(x_test)
         out2 = model2(x_test)
         assert torch.allclose(out1, out2, atol=1e-5)
+
+
+@pytest.mark.integration
+def test_counterfactual_objective_smoke(monkeypatch: pytest.MonkeyPatch) -> None:
+    train_samples = [
+        format_imdb_example("Great cast and a compelling story.", 1)[0],
+        format_imdb_example("Terrible pacing and weak acting.", 0)[0],
+    ]
+    val_samples = [
+        format_imdb_example("I liked the soundtrack and ending.", 1)[0],
+        format_imdb_example("I disliked the dialogue and tone.", 0)[0],
+    ]
+
+    monkeypatch.setattr(
+        train_module,
+        "load_imdb_sentiment",
+        lambda **kwargs: (train_samples, val_samples),
+    )
+
+    cfg = dict(DEFAULT_CONFIG)
+    cfg["dataset_id"] = "imdb_sentiment"
+    cfg["enable_counterfactual_objective"] = True
+    cfg["counterfactual_ce_weight"] = 1.0
+    cfg["counterfactual_embedding_weight"] = 0.2
+    cfg["epochs"] = 1
+    cfg["batch_size"] = 2
+    cfg["seq_len"] = 64
+    cfg["d_model"] = 32
+    cfg["num_heads"] = 2
+    cfg["num_layers"] = 2
+    cfg["d_ff"] = 128
+    cfg["checkpoint_dir"] = tempfile.mkdtemp()
+    cfg["hpo_results_dir"] = tempfile.mkdtemp()
+    results = train(cfg)
+    assert "final_train_loss" in results
+    assert isinstance(results["final_train_loss"], (int, float))
+    assert not (results["final_train_loss"] != results["final_train_loss"])

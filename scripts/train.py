@@ -88,6 +88,84 @@ def parse_args() -> argparse.Namespace:
         help="Truncate each IMDB review to at most N chars (at word boundary)",
     )
     p.add_argument(
+        "--imdb-use-full-splits",
+        action="store_true",
+        dest="imdb_use_full_splits",
+        help="Use full IMDB train/val splits (clears imdb_max_* limits from config file)",
+    )
+    p.add_argument(
+        "--enable-counterfactual-objective",
+        action="store_true",
+        dest="enable_counterfactual_objective",
+        help="Enable IMDB counterfactual/factual embedding objective",
+    )
+    p.add_argument(
+        "--counterfactual-ce-weight",
+        type=float,
+        dest="counterfactual_ce_weight",
+        help="Weight for LM cross-entropy in counterfactual objective",
+    )
+    p.add_argument(
+        "--counterfactual-embedding-weight",
+        type=float,
+        dest="counterfactual_embedding_weight",
+        help="Weight for treatment-weighted embedding loss term",
+    )
+    p.add_argument(
+        "--tarnet-two-heads",
+        action="store_true",
+        dest="tarnet_two_heads",
+        help="TARNet-style: shared trunk + 2 output heads (Y0/Y1) on same hidden states",
+    )
+    p.add_argument(
+        "--tarnet-head-n-fc",
+        type=int,
+        dest="tarnet_head_n_fc",
+        help="TARNet: number of FC layers in each head MLP (default 2)",
+    )
+    p.add_argument(
+        "--tarnet-head-hidden-dim",
+        type=int,
+        dest="tarnet_head_hidden_dim",
+        help="TARNet: hidden width for each head MLP (default: d_model)",
+    )
+    p.add_argument(
+        "--tarnet-head0-n-fc",
+        type=int,
+        dest="tarnet_head0_n_fc",
+        help="TARNet: FC layers for head0 (default: tarnet_head_n_fc)",
+    )
+    p.add_argument(
+        "--tarnet-head0-hidden-dim",
+        type=int,
+        dest="tarnet_head0_hidden_dim",
+        help="TARNet: hidden width for head0 (default: tarnet_head_hidden_dim or d_model)",
+    )
+    p.add_argument(
+        "--tarnet-head1-n-fc",
+        type=int,
+        dest="tarnet_head1_n_fc",
+        help="TARNet: FC layers for head1 (default: tarnet_head_n_fc)",
+    )
+    p.add_argument(
+        "--tarnet-head1-hidden-dim",
+        type=int,
+        dest="tarnet_head1_hidden_dim",
+        help="TARNet: hidden width for head1 (default: tarnet_head_hidden_dim or d_model)",
+    )
+    p.add_argument(
+        "--imdb-tarnet-command-prompt",
+        type=str,
+        dest="imdb_tarnet_command_prompt",
+        help='Treatment-invariant prompt prefix (e.g. "GENERATE an IMDB-like review:")',
+    )
+    p.add_argument(
+        "--tarnet-head-separation-weight",
+        type=float,
+        dest="tarnet_head_separation_weight",
+        help="TARNet: subtract this * JS(head0||head1) to discourage head collapse (default 0.0)",
+    )
+    p.add_argument(
         "--pg19-max-train-books",
         type=int,
         dest="pg19_max_train_books",
@@ -244,6 +322,33 @@ def main() -> None:
         overrides["imdb_max_val_samples"] = args.imdb_max_val_samples
     if args.imdb_max_review_chars is not None:
         overrides["imdb_max_review_chars"] = args.imdb_max_review_chars
+    if args.imdb_use_full_splits:
+        overrides["imdb_max_train_samples"] = None
+        overrides["imdb_max_val_samples"] = None
+    if args.enable_counterfactual_objective:
+        overrides["enable_counterfactual_objective"] = True
+    if args.counterfactual_ce_weight is not None:
+        overrides["counterfactual_ce_weight"] = args.counterfactual_ce_weight
+    if args.counterfactual_embedding_weight is not None:
+        overrides["counterfactual_embedding_weight"] = args.counterfactual_embedding_weight
+    if args.tarnet_two_heads:
+        overrides["tarnet_two_heads"] = True
+    if args.tarnet_head_n_fc is not None:
+        overrides["tarnet_head_n_fc"] = args.tarnet_head_n_fc
+    if args.tarnet_head_hidden_dim is not None:
+        overrides["tarnet_head_hidden_dim"] = args.tarnet_head_hidden_dim
+    if args.tarnet_head0_n_fc is not None:
+        overrides["tarnet_head0_n_fc"] = args.tarnet_head0_n_fc
+    if args.tarnet_head0_hidden_dim is not None:
+        overrides["tarnet_head0_hidden_dim"] = args.tarnet_head0_hidden_dim
+    if args.tarnet_head1_n_fc is not None:
+        overrides["tarnet_head1_n_fc"] = args.tarnet_head1_n_fc
+    if args.tarnet_head1_hidden_dim is not None:
+        overrides["tarnet_head1_hidden_dim"] = args.tarnet_head1_hidden_dim
+    if args.imdb_tarnet_command_prompt is not None:
+        overrides["imdb_tarnet_command_prompt"] = args.imdb_tarnet_command_prompt
+    if args.tarnet_head_separation_weight is not None:
+        overrides["tarnet_head_separation_weight"] = args.tarnet_head_separation_weight
     if args.pg19_max_train_books is not None:
         overrides["pg19_max_train_books"] = args.pg19_max_train_books
     if args.pg19_max_val_books is not None:

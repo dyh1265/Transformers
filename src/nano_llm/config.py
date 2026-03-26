@@ -30,6 +30,18 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "imdb_max_train_samples": None,
     "imdb_max_val_samples": None,
     "imdb_max_review_chars": None,
+    "enable_counterfactual_objective": False,
+    "counterfactual_ce_weight": 1.0,
+    "counterfactual_embedding_weight": 0.25,
+    "tarnet_two_heads": False,
+    "imdb_tarnet_command_prompt": "GENERATE an IMDB-like review:",
+    "tarnet_head_separation_weight": 0.0,
+    "tarnet_head_n_fc": 2,
+    "tarnet_head_hidden_dim": None,
+    "tarnet_head0_n_fc": None,
+    "tarnet_head0_hidden_dim": None,
+    "tarnet_head1_n_fc": None,
+    "tarnet_head1_hidden_dim": None,
     "pg19_max_train_books": None,
     "pg19_max_val_books": None,
     "pg19_max_chars_per_book": None,
@@ -81,6 +93,30 @@ CONFIG_50M_8GB: dict[str, Any] = {
     "dropout": 0.1,
 }
 
+# ~10M params (approx), moderate-size baseline
+CONFIG_10M: dict[str, Any] = {
+    **DEFAULT_CONFIG,
+    "d_model": 384,
+    "num_heads": 6,
+    "num_layers": 6,
+    "d_ff": 1536,
+    "seq_len": 256,
+    "batch_size": 8,
+    "dropout": 0.1,
+}
+
+
+def _unwrap_hpo_best_config_wrapper(data: dict[str, Any]) -> dict[str, Any]:
+    """Use inner training dict from HPO ``best_config.json`` (``{..., "config": {...}}``).
+
+    If that file is merged naïvely, top-level keys omit ``d_model`` / ``dataset_id`` and
+    training silently falls back to :data:`DEFAULT_CONFIG`.
+    """
+    inner = data.get("config")
+    if isinstance(inner, dict) and "d_model" in inner and "d_model" not in data:
+        return dict(inner)
+    return dict(data)
+
 
 def get_config() -> dict[str, Any]:
     """Return config from env or defaults."""
@@ -88,14 +124,21 @@ def get_config() -> dict[str, Any]:
     config_path = os.environ.get("NANO_LLM_CONFIG")
     if config_path and Path(config_path).exists():
         with open(config_path) as f:
-            config.update(json.load(f))
+            loaded = json.load(f)
+        if isinstance(loaded, dict):
+            config.update(_unwrap_hpo_best_config_wrapper(loaded))
     return config
 
 
 def load_config(path: str | Path) -> dict[str, Any]:
     """Load config from JSON file."""
     with open(path) as f:
-        return {**DEFAULT_CONFIG, **json.load(f)}
+        raw = json.load(f)
+    if not isinstance(raw, dict):
+        msg = f"config JSON must be an object, got {type(raw).__name__}"
+        raise TypeError(msg)
+    body = _unwrap_hpo_best_config_wrapper(raw)
+    return {**DEFAULT_CONFIG, **body}
 
 
 def save_config(config: dict[str, Any], path: str | Path) -> None:

@@ -12,6 +12,7 @@ from nano_llm.agent.llm_client import chat, parse_config_from_response
 from nano_llm.agent.prompts import (
     DEFAULT_SYSTEM_PROMPT,
     EIGHT_GB_SYSTEM_PROMPT,
+    IMDB_TARNET_SYSTEM_PROMPT,
     build_user_prompt,
 )
 from nano_llm.config import DEFAULT_CONFIG
@@ -48,26 +49,74 @@ def _sanitize_config(raw: dict[str, Any]) -> dict[str, Any] | None:
     except (TypeError, ValueError):
         return None
 
+    # Optional TARNet knobs (fill stable defaults to keep signatures comparable)
+    cfg["tarnet_head_n_fc"] = 2
+    cfg["tarnet_head_hidden_dim"] = None
+    cfg["tarnet_head_separation_weight"] = 0.0
+    cfg["tarnet_head0_n_fc"] = None
+    cfg["tarnet_head0_hidden_dim"] = None
+    cfg["tarnet_head1_n_fc"] = None
+    cfg["tarnet_head1_hidden_dim"] = None
+    if "tarnet_head_n_fc" in raw and raw["tarnet_head_n_fc"] is not None:
+        try:
+            cfg["tarnet_head_n_fc"] = int(raw["tarnet_head_n_fc"])
+        except (TypeError, ValueError):
+            return None
+        if not (1 <= cfg["tarnet_head_n_fc"] <= 4):
+            return None
+    if "tarnet_head_hidden_dim" in raw and raw["tarnet_head_hidden_dim"] is not None:
+        try:
+            cfg["tarnet_head_hidden_dim"] = int(raw["tarnet_head_hidden_dim"])
+        except (TypeError, ValueError):
+            return None
+        if not (128 <= cfg["tarnet_head_hidden_dim"] <= 1024):
+            return None
+    if "tarnet_head_separation_weight" in raw and raw["tarnet_head_separation_weight"] is not None:
+        try:
+            cfg["tarnet_head_separation_weight"] = float(raw["tarnet_head_separation_weight"])
+        except (TypeError, ValueError):
+            return None
+        if not (0.0 <= cfg["tarnet_head_separation_weight"] <= 0.2):
+            return None
+
+    for side in ("0", "1"):
+        k_n = f"tarnet_head{side}_n_fc"
+        k_h = f"tarnet_head{side}_hidden_dim"
+        if k_n in raw and raw[k_n] is not None:
+            try:
+                cfg[k_n] = int(raw[k_n])
+            except (TypeError, ValueError):
+                return None
+            if not (1 <= cfg[k_n] <= 4):
+                return None
+        if k_h in raw and raw[k_h] is not None:
+            try:
+                cfg[k_h] = int(raw[k_h])
+            except (TypeError, ValueError):
+                return None
+            if not (128 <= cfg[k_h] <= 1024):
+                return None
+
     # Enforce practical bounds from prompts/defaults.
-    if not (64 <= cfg["d_model"] <= 256):
+    if not (64 <= cfg["d_model"] <= 512):
         return None
     if not (2 <= cfg["num_heads"] <= 8):
         return None
     if cfg["d_model"] % cfg["num_heads"] != 0:
         return None
-    if not (2 <= cfg["num_layers"] <= 8):
+    if not (2 <= cfg["num_layers"] <= 10):
         return None
-    if not (256 <= cfg["d_ff"] <= 1024):
+    if not (256 <= cfg["d_ff"] <= 2048):
         return None
     if not (64 <= cfg["seq_len"] <= 256):
         return None
     if not (0.0 <= cfg["dropout"] <= 0.2):
         return None
-    if not (4 <= cfg["batch_size"] <= 64):
+    if not (2 <= cfg["batch_size"] <= 64):
         return None
     if not (1e-4 <= cfg["learning_rate"] <= 1e-3):
         return None
-    if not (5 <= cfg["epochs"] <= 30):
+    if not (1 <= cfg["epochs"] <= 30):
         return None
     return cfg
 
@@ -84,8 +133,15 @@ def _config_signature(config: dict[str, Any]) -> tuple[Any, ...]:
         "batch_size",
         "learning_rate",
         "epochs",
+        "tarnet_head_n_fc",
+        "tarnet_head_hidden_dim",
+        "tarnet_head_separation_weight",
+        "tarnet_head0_n_fc",
+        "tarnet_head0_hidden_dim",
+        "tarnet_head1_n_fc",
+        "tarnet_head1_hidden_dim",
     )
-    return tuple(config[k] for k in keys)
+    return tuple(config.get(k) for k in keys)
 
 
 def run_training(config: dict, workspace: Path | None = None) -> dict | None:
@@ -128,6 +184,11 @@ def tune(
     bpe_vocab_size: int | None = None,
     bpe_word_boundary_aware: bool | None = None,
     results_dir: str | None = None,
+    imdb_max_train_samples: int | None = None,
+    imdb_max_val_samples: int | None = None,
+    enable_counterfactual_objective: bool | None = None,
+    tarnet_two_heads: bool | None = None,
+    fixed_epochs: int | None = None,
 ) -> list[dict]:
     """Run HPO agent loop."""
     workspace = workspace or Path.cwd()
@@ -146,7 +207,10 @@ def tune(
 
     trial_history: list[dict] = []
     seen_configs: set[tuple[Any, ...]] = set()
-    system_prompt = EIGHT_GB_SYSTEM_PROMPT if use_8gb_bounds else DEFAULT_SYSTEM_PROMPT
+    if effective_dataset_id == "imdb_sentiment" and (enable_counterfactual_objective or tarnet_two_heads):
+        system_prompt = IMDB_TARNET_SYSTEM_PROMPT
+    else:
+        system_prompt = EIGHT_GB_SYSTEM_PROMPT if use_8gb_bounds else DEFAULT_SYSTEM_PROMPT
 
     for trial_id in range(max_trials):
         config: dict[str, Any] | None = None
@@ -171,6 +235,28 @@ def tune(
             candidate = _sanitize_config(parsed)
             if not candidate:
                 continue
+            if fixed_epochs is not None:
+                candidate["epochs"] = int(fixed_epochs)
+            # If TARNet is enabled for this HPO run, finalize head defaults before de-dup.
+            if tarnet_two_heads:
+                candidate["tarnet_two_heads"] = True
+            if enable_counterfactual_objective:
+                candidate["enable_counterfactual_objective"] = True
+            if bool(candidate.get("tarnet_two_heads")):
+                shared_n_fc = int(candidate.get("tarnet_head_n_fc", 2))
+                shared_hidden = candidate.get("tarnet_head_hidden_dim")
+                shared_hidden = int(candidate["d_model"]) if shared_hidden is None else int(shared_hidden)
+
+                # Deterministic defaults (no trial_id) so duplicates can be skipped.
+                candidate["tarnet_head0_n_fc"] = int(candidate.get("tarnet_head0_n_fc") or shared_n_fc)
+                candidate["tarnet_head1_n_fc"] = int(candidate.get("tarnet_head1_n_fc") or shared_n_fc)
+                candidate["tarnet_head0_hidden_dim"] = int(
+                    candidate.get("tarnet_head0_hidden_dim") or max(128, min(1024, shared_hidden))
+                )
+                candidate["tarnet_head1_hidden_dim"] = int(
+                    candidate.get("tarnet_head1_hidden_dim") or max(128, min(1024, shared_hidden * 2))
+                )
+
             if _config_signature(candidate) in seen_configs:
                 continue
             config = candidate
@@ -181,17 +267,26 @@ def tune(
             continue
         config["trial_id"] = trial_id
         config["hpo_results_dir"] = str(out_dir)
-        for k, v in DEFAULT_CONFIG.items():
-            if k not in config:
-                config[k] = v
         if dataset_id is not None:
             config["dataset_id"] = dataset_id
+        if effective_dataset_id == "imdb_sentiment":
+            if imdb_max_train_samples is not None:
+                config["imdb_max_train_samples"] = int(imdb_max_train_samples)
+            if imdb_max_val_samples is not None:
+                config["imdb_max_val_samples"] = int(imdb_max_val_samples)
         if tokenizer_type is not None:
             config["tokenizer_type"] = tokenizer_type
         if bpe_vocab_size is not None:
             config["bpe_vocab_size"] = int(bpe_vocab_size)
         if bpe_word_boundary_aware is not None:
             config["bpe_word_boundary_aware"] = bool(bpe_word_boundary_aware)
+        if enable_counterfactual_objective is not None:
+            config["enable_counterfactual_objective"] = bool(enable_counterfactual_objective)
+        if tarnet_two_heads is not None:
+            config["tarnet_two_heads"] = bool(tarnet_two_heads)
+        if fixed_epochs is not None:
+            config["epochs"] = int(fixed_epochs)
+        # Per-head defaults were finalized before de-dup; keep them as-is here.
 
         with open(out_dir / f"trial_{trial_id}_proposal.json", "w") as f:
             json.dump(
