@@ -420,15 +420,6 @@ docker compose run --rm -it chat --checkpoint checkpoints/counterfactual_repeat_
 ```
 
 Generate [+/-/b/q] (default b):
-
-[Y0]
-One of the most amazing movies ever. This one is so bad that it's not fun to watch, and you can't help but laugh about it. There is no story in this movie, or excitement (sometimes) in this film which has been done with good performance and hardly scary moments. And I think the problem was that there was more to this movie than any of those which would really be damned about what was good for something that selled us to lower and move forward, or talking with. Sadly, the stories sequence of five minutes asides in confusion but because it's literally not gay or when you'll end just think agonize frievous only to you. The film's twist is dull; except for Shea and down-a-looking little tal
-
-[Y1]
-What a great movie! This is the best film ever made. The cast was fantasic, and sometimes it seemed like Jack Smith didn't try to be in this one as wonderfully as he did in his movies. As for the porn star, I though I think that's what you want to see.
-
-Generate [+/-/b/q] (default b):
-
 [Y0]
 ember the same way, and it was all downhill from there. The pace is terrible, but nothing exciting happens. So what's with that? And why is this movie such a confused mess of old film? Too many story lines involve between those guards where you see it only to be fascistic (I'm not asking for more) to disgust over the center of this movie and think that you had good times past her and I was really let down but it seldom became more informative.
 
@@ -451,8 +442,6 @@ ts, and then all of a sudden he decides to go back to live with his wife. There'
 
 Perhaps the most interesting thing about this movie is that it has no sense of disbelief. The story is good, but not as funny as you can see, and it's excellent! That's what I liked.
 
-
-
 [Y0]
 
 OK, there are some funny moments in this movie. The characters were poorly drawn and extras were not too bad. And the story was terrible, I thought it was good for a low budget film. This is only because of it's just that it has non-plot tension and plot lines that severely cut together without an overall damning flatulence of any sort which is really abounding! Scarface was stilted, as in the old hospital cosmic mansion on his head with similar powers; he did NOT give kid all of what he examined that?? Affore comes to be mental into light-hearking but this film's finest storm is relevance, and yet you'll be modish and I've seen only for good old pick-basic election, when I th
@@ -461,3 +450,8 @@ OK, there are some funny moments in this movie. The characters were poorly drawn
 
 One of the most incredible films ever made. This is a movie that worked beautifully, and it was considering the programmes on this site, but I found it to be a lot more open-minded than you have seen for example. The story is dark and nicely detailed with good suspension of disbelief and quality.
 
+[Y0]
+What a waste of time. To be honest, this is only the worst movie ever made! The premises in this movie seem to sound like it was dubbed or not. Sometimes you'll get by the casting of Cagney and Adams, which may be more than that.
+
+[Y1]
+Have you ever seen this movie? This is a superb film. The casting of the two leads, especially Sammo Hung as the woman whose father was born in Afghanistan and he did not get himself into being a parrot. I think that it's madly because it's strength and sentimentality is more out of place, as with most old movies they'll live without exceptional conversation.
