@@ -96,12 +96,6 @@ def _zero_init_fully_connected_output(fc: FullyConnected) -> None:
             nn.init.zeros_(fc.out.bias)
 
 
-def _zero_init_linear(linear: nn.Linear) -> None:
-    nn.init.zeros_(linear.weight)
-    if linear.bias is not None:
-        nn.init.zeros_(linear.bias)
-
-
 class NanoLLM(nn.Module):
     """Decoder-only transformer for next-token prediction.
 
@@ -111,10 +105,8 @@ class NanoLLM(nn.Module):
 
     TARNet two-head mode: the trunk produces a hidden state per position; a **shared**
     head predicts vocabulary logits (treatment-agnostic "review content"), and two
-    **sentiment heads** add residual logits so Y(0)=shared+Δ_neg and Y(1)=shared+Δ_pos.
-    With ``block_attn_residuals=True``, Δ_neg/Δ_pos come from **extra inter-block stacks**
-    on ``hidden`` plus zero-init linear projections; with a vanilla trunk, Δ uses small
-    FullyConnected heads on ``hidden`` (unchanged).
+    **FullyConnected** heads add zero-init residual logits so Y(0)=shared+Δ_neg and
+    Y(1)=shared+Δ_pos.
     """
 
     def __init__(
@@ -166,10 +158,13 @@ class NanoLLM(nn.Module):
             ]
         )
         self.ln_f = nn.LayerNorm(d_model)
-        self.tarnet_sentiment_inter_blocks = bool(tarnet_two_heads and self.block_attn_residuals)
         if self.tarnet_two_heads:
-            head0_n_fc = int(tarnet_head0_n_fc) if tarnet_head0_n_fc is not None else int(tarnet_head_n_fc)
-            head1_n_fc = int(tarnet_head1_n_fc) if tarnet_head1_n_fc is not None else int(tarnet_head_n_fc)
+            head0_n_fc = (
+                int(tarnet_head0_n_fc) if tarnet_head0_n_fc is not None else int(tarnet_head_n_fc)
+            )
+            head1_n_fc = (
+                int(tarnet_head1_n_fc) if tarnet_head1_n_fc is not None else int(tarnet_head_n_fc)
+            )
             head0_hidden = (
                 int(tarnet_head0_hidden_dim)
                 if tarnet_head0_hidden_dim is not None
@@ -201,53 +196,32 @@ class NanoLLM(nn.Module):
                 batch_norm=False,
                 use_bias=False,
             )
-            if self.tarnet_sentiment_inter_blocks:
-                # Two separate inter-block stacks on trunk hidden (same depth as trunk); linear Δ to vocab, zero-init.
-                def _sent_stack() -> nn.ModuleList:
-                    return nn.ModuleList(
-                        [
-                            InterBlockAttnDecoderBlock(
-                                d_model, num_heads, d_ff, dropout=dropout, rope=rope
-                            )
-                            for _ in range(num_layers)
-                        ]
-                    )
-
-                self.tarnet_sentiment_blocks0 = _sent_stack()
-                self.tarnet_sentiment_blocks1 = _sent_stack()
-                self.ln_tarnet_sent0 = nn.LayerNorm(d_model)
-                self.ln_tarnet_sent1 = nn.LayerNorm(d_model)
-                self.tarnet_sentiment_proj0 = nn.Linear(d_model, vocab_size, bias=False)
-                self.tarnet_sentiment_proj1 = nn.Linear(d_model, vocab_size, bias=False)
-                _zero_init_linear(self.tarnet_sentiment_proj0)
-                _zero_init_linear(self.tarnet_sentiment_proj1)
-            else:
-                self.tarnet_sentiment_delta0 = FullyConnected(
-                    n_fc=head0_n_fc,
-                    in_size=d_model,
-                    hidden_phi=head0_hidden,
-                    out_size=vocab_size,
-                    final_activation="linear",
-                    activation="gelu",
-                    dropout=dropout > 0,
-                    dropout_rate=dropout,
-                    batch_norm=False,
-                    use_bias=False,
-                )
-                self.tarnet_sentiment_delta1 = FullyConnected(
-                    n_fc=head1_n_fc,
-                    in_size=d_model,
-                    hidden_phi=head1_hidden,
-                    out_size=vocab_size,
-                    final_activation="linear",
-                    activation="gelu",
-                    dropout=dropout > 0,
-                    dropout_rate=dropout,
-                    batch_norm=False,
-                    use_bias=False,
-                )
-                _zero_init_fully_connected_output(self.tarnet_sentiment_delta0)
-                _zero_init_fully_connected_output(self.tarnet_sentiment_delta1)
+            self.tarnet_sentiment_delta0 = FullyConnected(
+                n_fc=head0_n_fc,
+                in_size=d_model,
+                hidden_phi=head0_hidden,
+                out_size=vocab_size,
+                final_activation="linear",
+                activation="gelu",
+                dropout=dropout > 0,
+                dropout_rate=dropout,
+                batch_norm=False,
+                use_bias=False,
+            )
+            self.tarnet_sentiment_delta1 = FullyConnected(
+                n_fc=head1_n_fc,
+                in_size=d_model,
+                hidden_phi=head1_hidden,
+                out_size=vocab_size,
+                final_activation="linear",
+                activation="gelu",
+                dropout=dropout > 0,
+                dropout_rate=dropout,
+                batch_norm=False,
+                use_bias=False,
+            )
+            _zero_init_fully_connected_output(self.tarnet_sentiment_delta0)
+            _zero_init_fully_connected_output(self.tarnet_sentiment_delta1)
         elif not weight_tie:
             self.head = FullyConnected(
                 n_fc=2,
@@ -264,7 +238,10 @@ class NanoLLM(nn.Module):
 
     @property
     def decoder_stack(self) -> Literal["vanilla", "inter_block"]:
-        """``vanilla``: sequential ``DecoderBlock`` stack. ``inter_block``: ``InterBlockAttnDecoderBlock``."""
+        """``vanilla``: sequential ``DecoderBlock`` stack.
+
+        ``inter_block``: ``InterBlockAttnDecoderBlock``.
+        """
         return "inter_block" if self.block_attn_residuals else "vanilla"
 
     def _run_vanilla_decoder_stack(self, x: torch.Tensor) -> torch.Tensor:
@@ -274,13 +251,16 @@ class NanoLLM(nn.Module):
         return x
 
     def _run_inter_block_decoder_stack(self, x: torch.Tensor) -> torch.Tensor:
-        """Macro-block memory + depth-wise mixing before each sublayer (see ``InterBlockAttnDecoderBlock``)."""
+        """Macro-block memory + depth-wise mixing before each sublayer.
+
+        See ``InterBlockAttnDecoderBlock``.
+        """
         return self._run_inter_block_decoder_stack_with_blocks(x, self.blocks)
 
     def _run_inter_block_decoder_stack_with_blocks(
         self, x: torch.Tensor, blocks_module: nn.ModuleList
     ) -> torch.Tensor:
-        """Same as trunk inter-block loop, but over an arbitrary ``InterBlockAttnDecoderBlock`` list."""
+        """Inter-block loop over an arbitrary ``InterBlockAttnDecoderBlock`` list."""
         blocks: list[torch.Tensor] = [x]
         partial: torch.Tensor | None = None
         for li, block in enumerate(blocks_module):
@@ -317,20 +297,8 @@ class NanoLLM(nn.Module):
         hidden = x
         if self.tarnet_two_heads:
             logits_shared = self.tarnet_shared_head(hidden)
-            if self.tarnet_sentiment_inter_blocks:
-                h0 = self._run_inter_block_decoder_stack_with_blocks(
-                    hidden, self.tarnet_sentiment_blocks0
-                )
-                h1 = self._run_inter_block_decoder_stack_with_blocks(
-                    hidden, self.tarnet_sentiment_blocks1
-                )
-                delta0 = self.tarnet_sentiment_proj0(self.ln_tarnet_sent0(h0))
-                delta1 = self.tarnet_sentiment_proj1(self.ln_tarnet_sent1(h1))
-                logits0 = logits_shared + delta0
-                logits1 = logits_shared + delta1
-            else:
-                logits0 = logits_shared + self.tarnet_sentiment_delta0(hidden)
-                logits1 = logits_shared + self.tarnet_sentiment_delta1(hidden)
+            logits0 = logits_shared + self.tarnet_sentiment_delta0(hidden)
+            logits1 = logits_shared + self.tarnet_sentiment_delta1(hidden)
             if return_both_heads:
                 if return_hidden:
                     return logits0, logits1, hidden

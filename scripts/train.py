@@ -341,6 +341,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     import traceback
+
     try:
         main()
     except Exception as e:

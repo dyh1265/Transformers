@@ -8,16 +8,16 @@ from typing import TYPE_CHECKING
 import torch
 
 # Unicode replacement char (invalid UTF-8 decode) and common wrong-chars to fix
-REPLACEMENT_CHAR = "\uFFFD"
+REPLACEMENT_CHAR = "\ufffd"
 SANITIZE_REPLACEMENTS = {
-    "\u00B4": "'",  # acute accent ´
-    "\u02B9": "'",  # modifier letter prime ʻ
-    "\u02BA": '"',  # modifier letter double prime
-    "\u00A0": " ",  # nbsp -> space
+    "\u00b4": "'",  # acute accent ´
+    "\u02b9": "'",  # modifier letter prime ʻ
+    "\u02ba": '"',  # modifier letter double prime
+    "\u00a0": " ",  # nbsp -> space
     "\u2018": "'",  # left single quote
     "\u2019": "'",  # right single quote
-    "\u201C": '"',  # left double quote
-    "\u201D": '"',  # right double quote
+    "\u201c": '"',  # left double quote
+    "\u201d": '"',  # right double quote
 }
 
 
@@ -27,11 +27,9 @@ def sanitize_output(text: str) -> str:
     for bad, good in SANITIZE_REPLACEMENTS.items():
         text = text.replace(bad, good)
     # Remove control/surrogate chars
-    text = "".join(
-        c for c in text
-        if unicodedata.category(c) not in ("Cc", "Cf", "Cs", "Co", "Cn")
-    )
+    text = "".join(c for c in text if unicodedata.category(c) not in ("Cc", "Cf", "Cs", "Co", "Cn"))
     return text
+
 
 if TYPE_CHECKING:
     from nano_llm.tokenizer import HFByteBPETokenizer
@@ -63,9 +61,7 @@ def _top_p_sample(logits: torch.Tensor, p: float) -> int:
     return sorted_idx[idx].item()
 
 
-def _apply_repetition_penalty(
-    logits: torch.Tensor, ids: list[int], penalty: float
-) -> torch.Tensor:
+def _apply_repetition_penalty(logits: torch.Tensor, ids: list[int], penalty: float) -> torch.Tensor:
     """Penalize logits for tokens that have already appeared."""
     if penalty == 1.0 or not ids:
         return logits

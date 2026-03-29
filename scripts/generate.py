@@ -125,7 +125,9 @@ def main() -> int:
         args.checkpoint,
         device=args.device or ("cuda" if __import__("torch").cuda.is_available() else "cpu"),
     )
-    max_context = args.max_context if args.max_context is not None else int(config.get("seq_len", 128))
+    max_context = (
+        args.max_context if args.max_context is not None else int(config.get("seq_len", 128))
+    )
 
     if args.both_heads:
         if not (hasattr(model, "tarnet_two_heads") and getattr(model, "tarnet_two_heads")):

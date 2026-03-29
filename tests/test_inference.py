@@ -6,8 +6,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from nano_llm.inference import generate
-from nano_llm.inference import load_model_and_tokenizer
+from nano_llm.inference import generate, load_model_and_tokenizer
 from nano_llm.inference.generate import sanitize_output
 from nano_llm.model import build_model
 from nano_llm.tokenizer import HFByteBPETokenizer
@@ -51,12 +50,12 @@ def _make_minimal_checkpoint(tmpdir: Path) -> Path:
 
 
 def test_sanitize_output_removes_replacement_char() -> None:
-    assert sanitize_output("Hello\uFFFD world") == "Hello world"
-    assert sanitize_output("a\uFFFD\uFFFDb") == "ab"
+    assert sanitize_output("Hello\ufffd world") == "Hello world"
+    assert sanitize_output("a\ufffd\ufffdb") == "ab"
 
 
 def test_sanitize_output_fixes_punctuation() -> None:
-    assert sanitize_output("Corbin\u00B4s") == "Corbin's"
+    assert sanitize_output("Corbin\u00b4s") == "Corbin's"
     assert sanitize_output("don\u2019t") == "don't"
 
 
@@ -93,9 +92,7 @@ def test_generate_returns_valid_text() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         path = _make_minimal_checkpoint(Path(tmp))
         model, tokenizer, _ = load_model_and_tokenizer(path, device="cpu")
-    out = generate(
-        model, tokenizer, "a", max_new_tokens=10, method="greedy", seed=0, device="cpu"
-    )
+    out = generate(model, tokenizer, "a", max_new_tokens=10, method="greedy", seed=0, device="cpu")
     assert isinstance(out, str)
     assert len(out) > 0
 
@@ -166,7 +163,13 @@ def test_load_raises_when_no_tokenizer_state_and_corpus_rebuild_disabled() -> No
         torch.save(
             {
                 "model": model.state_dict(),
-                "config": {"d_model": 16, "num_heads": 2, "num_layers": 2, "d_ff": 64, "seq_len": 64},
+                "config": {
+                    "d_model": 16,
+                    "num_heads": 2,
+                    "num_layers": 2,
+                    "d_ff": 64,
+                    "seq_len": 64,
+                },
             },
             path,
         )
@@ -202,3 +205,52 @@ def test_load_and_generate_with_tokenizer_state() -> None:
     out = generate(model, tokenizer, "HI", max_new_tokens=5, method="greedy", seed=0, device="cpu")
     assert isinstance(out, str)
     assert out.startswith("HI")
+
+
+def test_load_tarnet_fc_deltas_with_inter_trunk() -> None:
+    """Inter-block trunk + TARNet FullyConnected Δ heads."""
+    pytest.importorskip("tokenizers")
+    train_corpus = "hello world " * 50
+    tokenizer = HFByteBPETokenizer.from_text(train_corpus, vocab_size=128)
+    vs = tokenizer.vocab_size
+    model = build_model(
+        vocab_size=vs,
+        d_model=32,
+        num_heads=2,
+        num_layers=2,
+        d_ff=64,
+        max_len=64,
+        dropout=0,
+        weight_tie=False,
+        tarnet_two_heads=True,
+        block_attn_residuals=True,
+        position_encoding="rope",
+    )
+    cfg = {
+        "d_model": 32,
+        "num_heads": 2,
+        "num_layers": 2,
+        "d_ff": 64,
+        "seq_len": 32,
+        "weight_tie": False,
+        "tarnet_two_heads": True,
+        "block_attn_residuals": True,
+        "position_encoding": "rope",
+        "macro_block_size": 2,
+        "max_block_representations": 9,
+        "tarnet_head_n_fc": 2,
+        "tokenizer_type": "hf_bpe_byte",
+        "bpe_vocab_size": 128,
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "tarnet_trunk_inter_fc_delta.pt"
+        torch.save(
+            {
+                "model": model.state_dict(),
+                "config": cfg,
+                "tokenizer_state": tokenizer.to_state(),
+            },
+            path,
+        )
+        loaded, _, _ = load_model_and_tokenizer(path, device="cpu")
+    assert hasattr(loaded, "tarnet_sentiment_delta0")

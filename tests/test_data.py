@@ -1,23 +1,22 @@
 """Tests for data loading and preprocessing."""
 
+import pytest
 import torch
 
-import pytest
-
 from nano_llm.data import (
-    IMDBDataset,
     NEGATIVE_SENTIMENT,
     POSITIVE_SENTIMENT,
     REVIEW_CLOSE,
     REVIEW_OPEN,
     SENTIMENT_CLOSE,
     SENTIMENT_OPEN,
+    IMDBDataset,
+    _normalize_text,
+    _strip_html,
     create_dataloaders,
     format_imdb_example,
     load_imdb_sentiment,
     sentiment_to_treatment,
-    _normalize_text,
-    _strip_html,
 )
 from nano_llm.tokenizer import HFByteBPETokenizer
 
@@ -36,7 +35,9 @@ def test_create_dataloader_batch_shape() -> None:
     pytest.importorskip("tokenizers")
     train_samples, val_samples = _tiny_imdb_samples()
     tokenizer = HFByteBPETokenizer.from_text("\n".join(train_samples + val_samples), vocab_size=128)
-    train_loader, _ = create_dataloaders(train_samples, val_samples, tokenizer, seq_len=64, batch_size=2)
+    train_loader, _ = create_dataloaders(
+        train_samples, val_samples, tokenizer, seq_len=64, batch_size=2
+    )
     for batch in train_loader:
         x, y = batch[0], batch[1]
         assert x.shape[0] <= 2
@@ -94,9 +95,7 @@ def test_strip_html_removes_tags() -> None:
 
 def test_load_imdb_sentiment_returns_samples() -> None:
     try:
-        train_samples, val_samples = load_imdb_sentiment(
-            max_train_samples=10, max_val_samples=5
-        )
+        train_samples, val_samples = load_imdb_sentiment(max_train_samples=10, max_val_samples=5)
     except ImportError:
         pytest.skip("datasets package not installed")
     assert len(train_samples) >= 10

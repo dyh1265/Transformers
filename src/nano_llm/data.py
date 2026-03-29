@@ -50,10 +50,7 @@ def _normalize_text(text: str) -> str:
     text = unicodedata.normalize("NFD", text)
     text = "".join(c for c in text if unicodedata.category(c) != "Mn")
     # Remove control/surrogate chars
-    text = "".join(
-        c for c in text
-        if unicodedata.category(c) not in ("Cc", "Cf", "Cs", "Co", "Cn")
-    )
+    text = "".join(c for c in text if unicodedata.category(c) not in ("Cc", "Cf", "Cs", "Co", "Cn"))
     return " ".join(text.split())
 
 
@@ -149,7 +146,9 @@ def _extract_imdb_sentiment_and_review(
             f"IMDB natural-format prefix {head!r} does not match positive or negative instruction"
         )
 
-    sent_pattern = re.compile(r"\[SENTIMENT\]\s*(positive|negative)\s*\[/SENTIMENT\]", re.IGNORECASE)
+    sent_pattern = re.compile(
+        r"\[SENTIMENT\]\s*(positive|negative)\s*\[/SENTIMENT\]", re.IGNORECASE
+    )
     sent_match = sent_pattern.search(sample)
     if sent_match is None:
         raise ValueError("IMDB sample missing [SENTIMENT] ... [/SENTIMENT] segment")
@@ -176,7 +175,9 @@ def _format_conditioned_imdb_sample(
         instr = pos_i if s == POSITIVE_SENTIMENT else neg_i
         return f"<bos>{instr} {REVIEW_OPEN} {review} {REVIEW_CLOSE}<eos>"
     if style != "tags":
-        raise ValueError(f"imdb_conditioning_style must be 'tags' or 'natural', got {imdb_conditioning_style!r}")
+        raise ValueError(
+            f"imdb_conditioning_style must be 'tags' or 'natural', got {imdb_conditioning_style!r}"
+        )
     return f"<bos>{SENTIMENT_OPEN} {s} {SENTIMENT_CLOSE} {REVIEW_OPEN} {review} {REVIEW_CLOSE}<eos>"
 
 
@@ -411,8 +412,19 @@ class IMDBDataset(Dataset):
 
     def __getitem__(
         self, idx: int
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        x, y, treatment, review_mask, x_pos, x_neg, review_mask_pos, review_mask_neg = self.chunks[idx]
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+    ]:
+        x, y, treatment, review_mask, x_pos, x_neg, review_mask_pos, review_mask_neg = self.chunks[
+            idx
+        ]
         # Ensure every returned sequence is exactly `seq_len - 1` tokens.
         # The factual/positive/negative branches can tokenize to slightly different
         # prefix lengths (e.g. "positive" vs "negative"), so we must pad/truncate
@@ -496,7 +508,9 @@ class IMDBTARNetDataset(Dataset):
     def __len__(self) -> int:
         return len(self.chunks)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def __getitem__(
+        self, idx: int
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         x, y, treatment, review_mask = self.chunks[idx]
         pad_len = (self.seq_len - 1) - len(x)
         if pad_len > 0:
@@ -576,10 +590,14 @@ def create_dataloaders(
         num_workers=0,
         pin_memory=pin_memory,
     )
-    val_loader = DataLoader(
-        val_ds,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=0,
-    ) if len(val_ds) > 0 else None
+    val_loader = (
+        DataLoader(
+            val_ds,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=0,
+        )
+        if len(val_ds) > 0
+        else None
+    )
     return train_loader, val_loader

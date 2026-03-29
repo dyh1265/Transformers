@@ -7,17 +7,17 @@ name = "nano-llm"
 version = "0.1.0"
 description = "Decoder-only transformer for training small LLMs from scratch"
 readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.10"
 dependencies = [
     "torch>=2.0",
     "numpy",
     "pytest",
     "pytest-cov",
-    "openai>=1.0",
 ]
 
 [project.optional-dependencies]
-dev = ["ruff", "mypy"]
+dev = ["ruff", "mypy", "pre-commit"]
 wandb = ["wandb>=0.16.0"]
 
 [tool.setuptools.packages.find]
@@ -36,3 +36,17 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W"]
+
+[tool.ruff.lint.per-file-ignores]
+# PyTorch uses `F`; HF tokenizers expose classes named Tokenizer, BPE, etc.
+"src/nano_llm/train.py" = ["N812"]
+"src/nano_llm/tokenizer.py" = ["N806"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_unused_ignores = true
+ignore_missing_imports = true
+
+[tool.coverage.report]
+fail_under = 40
+show_missing = true

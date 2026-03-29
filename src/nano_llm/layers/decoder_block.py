@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 
 class DecoderBlock(nn.Module):
-    """GPT-style decoder block: LayerNorm -> CausalAttention -> Residual -> LayerNorm -> FFN -> Residual."""
+    """GPT-style decoder block: pre-norm attention + residual, pre-norm FFN + residual."""
 
     def __init__(
         self,
@@ -35,7 +35,6 @@ class DecoderBlock(nn.Module):
             nn.Linear(d_ff, d_model),
             nn.Dropout(dropout),
         )
-        
 
     def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
         x = x + self.attn(self.ln1(x), mask=mask)

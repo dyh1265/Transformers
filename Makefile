@@ -8,12 +8,9 @@ SERVICE := train
 CHECKPOINT ?= checkpoints/best.pt
 IMDB_CHECKPOINT ?= checkpoints/imdb_sentiment/hf_bpe_byte/best.pt
 EPOCHS ?= 30
-PROMPT ?= <bos>[SENTIMENT] positive [/SENTIMENT] [REVIEW] 
+PROMPT ?= <bos>[SENTIMENT] positive [/SENTIMENT] [REVIEW]
 MAX_TOKENS ?= 300
 METHOD ?= greedy
-MAX_TRIALS ?= 10
-HPO_MODEL ?= llama3.2:1b
-HPO_BASE_URL ?= http://host.docker.internal:11434/v1/
 HPO_RESULTS_DIR ?= hpo_results/imdb_sentiment/char
 D_MODEL ?= 768
 NUM_LAYERS ?= 8
@@ -28,7 +25,7 @@ TRAIN_PERF_ARGS ?=
 
 COMPOSE := docker compose
 
-.PHONY: help build train resume train-imdb generate chat-imdb hpo hpo-8gb hpo-rank train-best shell lint format test test-cov test-all clean
+.PHONY: help build train resume train-imdb generate chat-imdb hpo-rank train-best shell lint format test test-cov test-all clean
 
 help:
 	@echo "Nano-LLM targets:"
@@ -37,9 +34,7 @@ help:
 	@echo "  make resume     - Resume training (EPOCHS=15, CHECKPOINT=checkpoints/best.pt)"
 	@echo "  make train-best - Train from best HPO config (saves to checkpoints/imdb_sentiment/<tokenizer>)"
 	@echo "  make generate   - Generate text (PROMPT, MAX_TOKENS, METHOD)"
-	@echo "  make hpo        - Run HPO agent in Docker"
-	@echo "  make hpo-8gb    - Run HPO agent with 8GB-safe bounds"
-	@echo "  make hpo-rank   - Rank HPO trials by quality metrics"
+	@echo "  make hpo-rank   - Rank HPO trials by quality metrics (trial_*.json under hpo_results/)"
 	@echo "  make shell      - Interactive bash in container"
 	@echo "  make lint       - Run ruff check and format check"
 	@echo "  make format     - Run ruff fix and format"
@@ -48,7 +43,7 @@ help:
 	@echo "  make test-all   - Run all tests including integration"
 	@echo "  make clean      - Remove containers and caches"
 	@echo ""
-	@echo "Tokenizer options (for scripts/train.py and scripts/hpo_agent.py):"
+	@echo "Tokenizer options (for scripts/train.py):"
 	@echo "  char      - Character-level tokenizer (default)"
 	@echo "  bpe       - Character-seeded BPE tokenizer"
 	@echo "  bpe_byte  - Byte-level BPE tokenizer (best for mixed Unicode)"
@@ -62,9 +57,6 @@ help:
 	@echo "Examples:"
 	@echo "  make resume EPOCHS=20"
 	@echo "  make generate PROMPT='JULIET:' MAX_TOKENS=200 METHOD=top_p"
-	@echo "  make hpo MAX_TRIALS=5 HPO_MODEL='llama3.2:1b'"
-	@echo "  make hpo MAX_TRIALS=10 ARGS='--tokenizer-type bpe --bpe-vocab-size 256 --bpe-word-boundary-aware'"
-	@echo "  make hpo MAX_TRIALS=10 ARGS='--tokenizer-type bpe_byte --bpe-vocab-size 256'"
 	@echo "  docker compose run --rm train python scripts/train.py --tokenizer-type bpe_byte --bpe-vocab-size 256"
 	@echo "  make train-best EPOCHS=30 HPO_RESULTS_DIR=hpo_results/char"
 	@echo "  make train-best EPOCHS=30 HPO_RESULTS_DIR=hpo_results/hf_bpe_byte"
@@ -111,12 +103,6 @@ generate: build
 
 chat-imdb: build
 	$(COMPOSE) run --rm -it chat --checkpoint "$(IMDB_CHECKPOINT)" $(ARGS)
-
-hpo: build
-	$(COMPOSE) run --rm $(SERVICE) python scripts/hpo_agent.py --max-trials $(MAX_TRIALS) --model "$(HPO_MODEL)" --base-url "$(HPO_BASE_URL)" $(ARGS)
-
-hpo-8gb: build
-	$(COMPOSE) run --rm $(SERVICE) python scripts/hpo_agent.py --max-trials $(MAX_TRIALS) --model "$(HPO_MODEL)" --base-url "$(HPO_BASE_URL)" --8gb $(ARGS)
 
 hpo-rank:
 	python scripts/rank_hpo.py

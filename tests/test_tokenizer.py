@@ -7,8 +7,8 @@ from nano_llm.tokenizer import HFByteBPETokenizer
 
 def test_hf_bpe_byte_roundtrip_when_available() -> None:
     pytest.importorskip("tokenizers")
-    t = HFByteBPETokenizer.from_text("hello cafe\u0301 \U0001F600", vocab_size=128)
-    text = "hello cafe\u0301 \U0001F600"
+    t = HFByteBPETokenizer.from_text("hello cafe\u0301 \U0001f600", vocab_size=128)
+    text = "hello cafe\u0301 \U0001f600"
     ids = t.encode(text)
     assert t.decode(ids) == text
     state = t.to_state()

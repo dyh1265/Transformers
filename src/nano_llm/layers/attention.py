@@ -68,9 +68,7 @@ class CausalSelfAttention(nn.Module):
             return self.wo(out)
         scale = self.d_k**-0.5
         logits = (q @ k.transpose(-2, -1)) * scale
-        causal_mask = torch.triu(
-            torch.ones(t, t, device=x.device, dtype=torch.bool), diagonal=1
-        )
+        causal_mask = torch.triu(torch.ones(t, t, device=x.device, dtype=torch.bool), diagonal=1)
         logits = logits.masked_fill(causal_mask.unsqueeze(0).unsqueeze(0), float("-inf"))
         logits = logits + mask
         weights = functional.softmax(logits, dim=-1)

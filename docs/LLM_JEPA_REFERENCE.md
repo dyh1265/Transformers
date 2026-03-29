@@ -62,24 +62,24 @@ Use `--pretrain --plain --trainall` with `from_config()` (no pretrained weights)
 
 ### High-value novelty directions
 
-1. **Execution-grounded JEPA (Code + Behavior views)**  
-   - Views: `(instruction, code)` and `(code, unit-test trace/output)`  
+1. **Execution-grounded JEPA (Code + Behavior views)**
+   - Views: `(instruction, code)` and `(code, unit-test trace/output)`
    - Aligns code with runtime behavior, not just surface form.
 
-2. **Multi-view JEPA**  
-   - 4 views: spec, code, tests, execution trace (or AST)  
+2. **Multi-view JEPA**
+   - 4 views: spec, code, tests, execution trace (or AST)
    - Cross-view JEPA graph.
 
-3. **Hierarchical JEPA**  
+3. **Hierarchical JEPA**
    - Token-level + function-level + file-level objectives.
 
-4. **Retriever-native coding**  
+4. **Retriever-native coding**
    - JEPA embeddings for query↔code↔fix retrieval (RAG).
 
-5. **Counterfactual / hard-negative JEPA**  
+5. **Counterfactual / hard-negative JEPA**
    - Near-miss negatives (almost-correct code, wrong variable).
 
-6. **Self-generated paired views**  
+6. **Self-generated paired views**
    - Auto-create: docstring↔code, bug↔patch, tests↔fix.
 
 ---

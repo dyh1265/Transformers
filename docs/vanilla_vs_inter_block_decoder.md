@@ -573,16 +573,16 @@ flowchart TB
 
 ## Part G — Misconceptions (FAQ)
 
-**“Inter-block is just a deeper vanilla model.”**  
+**“Inter-block is just a deeper vanilla model.”**
 No. Depth mixing and parallel residuals change the function class; stacking more vanilla layers is not equivalent.
 
-**“Inter-block adds cross-layer attention over tokens.”**  
+**“Inter-block adds cross-layer attention over tokens.”**
 No. Causal self-attention is still over **positions** as usual. The extra mechanism mixes **a handful of depth-level tensors** per position.
 
-**“I can load any checkpoint and toggle `--block-attn-residuals`.”**  
+**“I can load any checkpoint and toggle `--block-attn-residuals`.”**
 No. Build the same architecture the checkpoint was trained with.
 
-**“Vanilla and inter-block differ only at inference.”**  
+**“Vanilla and inter-block differ only at inference.”**
 They differ in **architecture**; training and inference both use the chosen stack.
 
 ---

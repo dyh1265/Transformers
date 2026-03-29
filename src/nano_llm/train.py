@@ -10,12 +10,14 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
+
 try:
     from tqdm.auto import tqdm
 except ImportError:  # pragma: no cover
     # Fallback when tqdm isn't installed; keeps training functional.
     def tqdm(x, **kwargs):
         return x
+
 
 from nano_llm.config import DEFAULT_CONFIG
 from nano_llm.data import PAD_TARGET_IGNORE_INDEX, create_dataloaders, load_imdb_sentiment
@@ -136,7 +138,6 @@ def _comparison_metrics(
     return {
         "perplexity": ppl,
         "normalized_ce": normalized_ce,
-        "bits_per_token": bits_per_token,
         "bits_per_byte": bits_per_byte,
     }
 
@@ -164,8 +165,11 @@ def _tarnet_weighted_ce_and_sep_loss(
     *,
     sep_weight: float,
     device: torch.device,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Compute TARNet treatment-weighted CE and optional separation regularizer."""
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """TARNet treatment-weighted CE plus optional separation term.
+
+    Returns ``(ce_loss, total_loss)``.
+    """
     bsz, seqlen, vocab_size = logits0.shape
     y_flat = y.reshape(-1)
     valid = (y_flat != PAD_TARGET_IGNORE_INDEX).reshape(bsz, seqlen)
@@ -191,7 +195,7 @@ def _tarnet_weighted_ce_and_sep_loss(
         js = _js_divergence_from_logits(logits0, logits1)
         sep_loss = -((js * valid.to(dtype=js.dtype)).sum() / valid.sum().clamp_min(1))
     total_loss = ce_loss + sep_weight * sep_loss
-    return ce_loss, sep_loss, total_loss
+    return ce_loss, total_loss
 
 
 def train(config: dict | None = None) -> dict:
@@ -239,9 +243,7 @@ def train(config: dict | None = None) -> dict:
     bpe_word_boundary_aware = bool(cfg.get("bpe_word_boundary_aware", False))
     tt = str(cfg.get("tokenizer_type", "hf_bpe_byte")).lower()
     if tt != "hf_bpe_byte":
-        logger.warning(
-            "tokenizer_type=%r is ignored; only hf_bpe_byte is supported", tt
-        )
+        logger.warning("tokenizer_type=%r is ignored; only hf_bpe_byte is supported", tt)
     cfg["tokenizer_type"] = "hf_bpe_byte"
     if resume_path and Path(resume_path).exists():
         logger.info("Resuming from checkpoint %s", resume_path)
@@ -270,7 +272,8 @@ def train(config: dict | None = None) -> dict:
         elif vocab is not None:
             raise ValueError(
                 "Checkpoint has legacy list `vocab` but no `tokenizer_state`. "
-                "Only Hugging Face byte-level BPE (hf_bpe_byte) is supported; retrain or add tokenizer_state."
+                "Only Hugging Face byte-level BPE (hf_bpe_byte) is supported; "
+                "retrain or add tokenizer_state."
             )
         else:
             tokenizer = build_tokenizer_from_text(
@@ -299,58 +302,39 @@ def train(config: dict | None = None) -> dict:
         seq_len=seq_len,
         batch_size=batch_size,
         imdb_tarnet_two_heads=bool(cfg.get("tarnet_two_heads", False)),
-        imdb_tarnet_command_prompt=str(cfg.get("imdb_tarnet_command_prompt", "GENERATE an IMDB-like review:")),
+        imdb_tarnet_command_prompt=str(
+            cfg.get("imdb_tarnet_command_prompt", "GENERATE an IMDB-like review:")
+        ),
         imdb_conditioning_style=str(cfg.get("imdb_conditioning_style", "tags")),
         imdb_positive_instruction=cfg.get("imdb_positive_instruction"),
         imdb_negative_instruction=cfg.get("imdb_negative_instruction"),
     )
 
     pos_enc = str(cfg.get("position_encoding", "sinusoidal")).lower()
+    model_kw = dict(
+        vocab_size=vocab_size,
+        d_model=int(cfg["d_model"]),
+        num_heads=int(cfg["num_heads"]),
+        num_layers=int(cfg["num_layers"]),
+        d_ff=int(cfg["d_ff"]),
+        max_len=seq_len + 10,
+        dropout=float(cfg["dropout"]),
+        weight_tie=cfg.get("weight_tie", True),
+        tarnet_two_heads=bool(cfg.get("tarnet_two_heads", False)),
+        tarnet_head_n_fc=int(cfg.get("tarnet_head_n_fc", 2)),
+        tarnet_head_hidden_dim=cfg.get("tarnet_head_hidden_dim"),
+        tarnet_head0_n_fc=cfg.get("tarnet_head0_n_fc"),
+        tarnet_head0_hidden_dim=cfg.get("tarnet_head0_hidden_dim"),
+        tarnet_head1_n_fc=cfg.get("tarnet_head1_n_fc"),
+        tarnet_head1_hidden_dim=cfg.get("tarnet_head1_hidden_dim"),
+        position_encoding=pos_enc,
+        block_attn_residuals=bool(cfg.get("block_attn_residuals", False)),
+        macro_block_size=int(cfg.get("macro_block_size", 2)),
+        max_block_representations=int(cfg.get("max_block_representations", 9)),
+    )
+    model = build_model(**model_kw)
     if resume_path and Path(resume_path).exists():
-        model = build_model(
-            vocab_size=vocab_size,
-            d_model=int(cfg["d_model"]),
-            num_heads=int(cfg["num_heads"]),
-            num_layers=int(cfg["num_layers"]),
-            d_ff=int(cfg["d_ff"]),
-            max_len=seq_len + 10,
-            dropout=float(cfg["dropout"]),
-            weight_tie=cfg.get("weight_tie", True),
-            tarnet_two_heads=bool(cfg.get("tarnet_two_heads", False)),
-            tarnet_head_n_fc=int(cfg.get("tarnet_head_n_fc", 2)),
-            tarnet_head_hidden_dim=cfg.get("tarnet_head_hidden_dim"),
-            tarnet_head0_n_fc=cfg.get("tarnet_head0_n_fc"),
-            tarnet_head0_hidden_dim=cfg.get("tarnet_head0_hidden_dim"),
-            tarnet_head1_n_fc=cfg.get("tarnet_head1_n_fc"),
-            tarnet_head1_hidden_dim=cfg.get("tarnet_head1_hidden_dim"),
-            position_encoding=pos_enc,
-            block_attn_residuals=bool(cfg.get("block_attn_residuals", False)),
-            macro_block_size=int(cfg.get("macro_block_size", 2)),
-            max_block_representations=int(cfg.get("max_block_representations", 9)),
-        )
         model.load_state_dict(normalize_checkpoint_state_dict(ckpt["model"]))
-    else:
-        model = build_model(
-            vocab_size=vocab_size,
-            d_model=int(cfg["d_model"]),
-            num_heads=int(cfg["num_heads"]),
-            num_layers=int(cfg["num_layers"]),
-            d_ff=int(cfg["d_ff"]),
-            max_len=seq_len + 10,
-            dropout=float(cfg["dropout"]),
-            weight_tie=cfg.get("weight_tie", True),
-            tarnet_two_heads=bool(cfg.get("tarnet_two_heads", False)),
-            tarnet_head_n_fc=int(cfg.get("tarnet_head_n_fc", 2)),
-            tarnet_head_hidden_dim=cfg.get("tarnet_head_hidden_dim"),
-            tarnet_head0_n_fc=cfg.get("tarnet_head0_n_fc"),
-            tarnet_head0_hidden_dim=cfg.get("tarnet_head0_hidden_dim"),
-            tarnet_head1_n_fc=cfg.get("tarnet_head1_n_fc"),
-            tarnet_head1_hidden_dim=cfg.get("tarnet_head1_hidden_dim"),
-            position_encoding=pos_enc,
-            block_attn_residuals=bool(cfg.get("block_attn_residuals", False)),
-            macro_block_size=int(cfg.get("macro_block_size", 2)),
-            max_block_representations=int(cfg.get("max_block_representations", 9)),
-        )
     model = model.to(device)
     if device.type == "cuda" and cfg.get("torch_compile", False):
         try:
@@ -431,8 +415,6 @@ def train(config: dict | None = None) -> dict:
         model.train()
         train_loss = 0.0
         train_loss_ce = 0.0
-        train_loss_emb = 0.0
-        train_loss_cf_weighted = 0.0
         tarnet_two_heads = bool(cfg.get("tarnet_two_heads", False))
         for batch in tqdm(
             train_loader,
@@ -441,9 +423,7 @@ def train(config: dict | None = None) -> dict:
             leave=False,
         ):
             batch_has_tarnet = (
-                tarnet_two_heads
-                and isinstance(batch, (tuple, list))
-                and len(batch) == 4
+                tarnet_two_heads and isinstance(batch, (tuple, list)) and len(batch) == 4
             )
             if batch_has_tarnet:
                 x, y, treatment, _review_mask = batch
@@ -460,7 +440,7 @@ def train(config: dict | None = None) -> dict:
                 with torch.amp.autocast("cuda", dtype=amp_dtype):
                     if batch_has_tarnet:
                         logits0, logits1 = model(x, return_both_heads=True)
-                        ce_loss, sep_loss, loss = _tarnet_weighted_ce_and_sep_loss(
+                        ce_loss, loss = _tarnet_weighted_ce_and_sep_loss(
                             logits0,
                             logits1,
                             y,
@@ -468,13 +448,9 @@ def train(config: dict | None = None) -> dict:
                             sep_weight=tarnet_head_separation_weight,
                             device=device,
                         )
-                        emb_loss = torch.tensor(0.0, device=device)
-                        cf_weighted = emb_loss
                     else:
                         logits = model(x)
                         ce_loss = criterion(logits.view(-1, vocab_size), y.view(-1))
-                        emb_loss = torch.tensor(0.0, device=device)
-                        cf_weighted = emb_loss
                         loss = ce_loss
                 if scaler is not None:
                     scaler.scale(loss).backward()
@@ -485,10 +461,8 @@ def train(config: dict | None = None) -> dict:
                     optimizer.step()
             else:
                 if batch_has_tarnet:
-                    logits0, logits1 = model(
-                        x, return_both_heads=True
-                    )
-                    ce_loss, sep_loss, loss = _tarnet_weighted_ce_and_sep_loss(
+                    logits0, logits1 = model(x, return_both_heads=True)
+                    ce_loss, loss = _tarnet_weighted_ce_and_sep_loss(
                         logits0,
                         logits1,
                         y,
@@ -496,36 +470,24 @@ def train(config: dict | None = None) -> dict:
                         sep_weight=tarnet_head_separation_weight,
                         device=device,
                     )
-                    emb_loss = torch.tensor(0.0, device=device)
-                    cf_weighted = emb_loss
                 else:
                     logits = model(x)
                     ce_loss = criterion(logits.view(-1, vocab_size), y.view(-1))
-                    emb_loss = torch.tensor(0.0, device=device)
-                    cf_weighted = emb_loss
                     loss = ce_loss
                 loss.backward()
                 optimizer.step()
             train_loss += loss.item() * x.size(0)
             train_loss_ce += ce_loss.item() * x.size(0)
-            train_loss_emb += emb_loss.item() * x.size(0)
-            train_loss_cf_weighted += cf_weighted.item() * x.size(0)
         train_loss /= len(train_loader.dataset)
         train_loss_ce /= len(train_loader.dataset)
-        train_loss_emb /= len(train_loader.dataset)
-        train_loss_cf_weighted /= len(train_loader.dataset)
         history["loss"].append(train_loss)
 
         val_loss = train_loss
         val_loss_ce = train_loss_ce
-        val_loss_emb = train_loss_emb
-        val_loss_cf_weighted = train_loss_cf_weighted
         if val_loader is not None:
             model.eval()
             val_loss = 0.0
             val_loss_ce = 0.0
-            val_loss_emb = 0.0
-            val_loss_cf_weighted = 0.0
             with torch.no_grad():
                 for batch in tqdm(
                     val_loader,
@@ -534,9 +496,7 @@ def train(config: dict | None = None) -> dict:
                     leave=False,
                 ):
                     batch_has_tarnet = (
-                        bool(cfg.get("tarnet_two_heads", False))
-                        and isinstance(batch, (tuple, list))
-                        and len(batch) == 4
+                        tarnet_two_heads and isinstance(batch, (tuple, list)) and len(batch) == 4
                     )
                     if batch_has_tarnet:
                         x, y, treatment, _review_mask = batch
@@ -552,7 +512,7 @@ def train(config: dict | None = None) -> dict:
                         with torch.amp.autocast("cuda", dtype=amp_dtype):
                             if batch_has_tarnet:
                                 logits0, logits1 = model(x, return_both_heads=True)
-                                ce_loss, sep_loss, loss = _tarnet_weighted_ce_and_sep_loss(
+                                ce_loss, loss = _tarnet_weighted_ce_and_sep_loss(
                                     logits0,
                                     logits1,
                                     y,
@@ -560,20 +520,14 @@ def train(config: dict | None = None) -> dict:
                                     sep_weight=tarnet_head_separation_weight,
                                     device=device,
                                 )
-                                emb_loss = torch.tensor(0.0, device=device)
-                                cf_weighted = emb_loss
                             else:
                                 logits = model(x)
                                 ce_loss = criterion(logits.view(-1, vocab_size), y.view(-1))
-                                emb_loss = torch.tensor(0.0, device=device)
-                                cf_weighted = emb_loss
                                 loss = ce_loss
                     else:
                         if batch_has_tarnet:
-                            logits0, logits1 = model(
-                                x, return_both_heads=True
-                            )
-                            ce_loss, sep_loss, loss = _tarnet_weighted_ce_and_sep_loss(
+                            logits0, logits1 = model(x, return_both_heads=True)
+                            ce_loss, loss = _tarnet_weighted_ce_and_sep_loss(
                                 logits0,
                                 logits1,
                                 y,
@@ -581,22 +535,14 @@ def train(config: dict | None = None) -> dict:
                                 sep_weight=tarnet_head_separation_weight,
                                 device=device,
                             )
-                            emb_loss = torch.tensor(0.0, device=device)
-                            cf_weighted = emb_loss
                         else:
                             logits = model(x)
                             ce_loss = criterion(logits.view(-1, vocab_size), y.view(-1))
-                            emb_loss = torch.tensor(0.0, device=device)
-                            cf_weighted = emb_loss
                             loss = ce_loss
                     val_loss += loss.item() * x.size(0)
                     val_loss_ce += ce_loss.item() * x.size(0)
-                    val_loss_emb += emb_loss.item() * x.size(0)
-                    val_loss_cf_weighted += cf_weighted.item() * x.size(0)
             val_loss /= len(val_loader.dataset)
             val_loss_ce /= len(val_loader.dataset)
-            val_loss_emb /= len(val_loader.dataset)
-            val_loss_cf_weighted /= len(val_loader.dataset)
             history["val_loss"].append(val_loss)
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
@@ -660,13 +606,9 @@ def train(config: dict | None = None) -> dict:
                         "train/loss": train_loss,
                         "train/perplexity": train_metrics["perplexity"],
                         "train/loss_ce": train_loss_ce,
-                        "train/loss_emb": train_loss_emb,
-                        "train/loss_cf_weighted": train_loss_cf_weighted,
                         "val/loss": val_loss,
                         "val/perplexity": val_metrics["perplexity"],
                         "val/loss_ce": val_loss_ce,
-                        "val/loss_emb": val_loss_emb,
-                        "val/loss_cf_weighted": val_loss_cf_weighted,
                         "val/bits_per_byte": val_metrics["bits_per_byte"],
                         "lr": current_lr,
                         "best_val_loss": best_val_loss,

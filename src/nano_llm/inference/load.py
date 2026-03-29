@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import torch
-import logging
 
 from nano_llm.model import build_model
 from nano_llm.tokenizer import HFByteBPETokenizer, build_tokenizer_from_text, tokenizer_from_state
@@ -81,9 +81,17 @@ def load_model_and_tokenizer(
         position_encoding = "rope"
     else:
         position_encoding = str(cfg.get("position_encoding", "sinusoidal")).lower()
-    block_attn_residuals = bool(cfg.get("block_attn_residuals", False)) or any(
-        "attn_res_proj" in k for k in state
-    )
+    # Trunk: inter-block only if main ``blocks.*`` have residual mixers (not TARNet stacks).
+    block_attn_residuals = bool(cfg.get("block_attn_residuals", False))
+    if not block_attn_residuals:
+        block_attn_residuals = any(k.startswith("blocks.") and "attn_res_proj" in k for k in state)
+
+    if any(k.startswith("tarnet_sentiment_blocks0.") for k in state):
+        raise ValueError(
+            "Checkpoint contains removed TARNet sentiment inter-block weights "
+            "(tarnet_sentiment_blocks0/1). Retrain with the current model (FC Δ heads only)."
+        )
+
     model = build_model(
         vocab_size=tokenizer.vocab_size,
         d_model=int(cfg["d_model"]),

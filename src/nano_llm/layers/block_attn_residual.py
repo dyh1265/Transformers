@@ -1,4 +1,3 @@
-
 """Inter-block attention residuals (attention over macro-block representations)."""
 
 from __future__ import annotations
@@ -50,7 +49,8 @@ def block_attn_res(
     flat = v.reshape(n * b * t, d)
     k = norm(flat).reshape(n, b, t, d)
     w = proj.weight.squeeze(0)  # [D]; one learned direction (pseudo-query), not per-depth.
-    # Per (b,t): score depth n via <w, k[n,b,t]>; softmax over n → α (input-dependent depth weights).
+    # Per (b,t): score depth n via <w, k[n,b,t]>; softmax over n → α
+    # (input-dependent depth weights).
     logits = torch.einsum("d,nbtd->nbt", w, k)
     alpha = functional.softmax(logits, dim=0)
     # Weighted sum of raw v slices → [B, T, D] for LN → Attn or FFN.
@@ -95,7 +95,8 @@ class InterBlockAttnDecoderBlock(nn.Module):
     ) -> tuple[torch.Tensor, list[torch.Tensor], torch.Tensor | None]:
         """Return (updated x, updated blocks list, partial for next layer)."""
         # First layer of each macro-block: depth mix uses completed snapshots only.
-        # Later layers: include `partial` (running Δ_attn+Δ_mlp inside this macro-block) as an extra slot.
+        # Later layers: include `partial` (running Δ_attn+Δ_mlp inside this macro-block)
+        # as an extra slot.
         start_of_macro = layer_index % macro_block_size == 0
         partial_for_v = None if start_of_macro else partial
 
@@ -107,7 +108,8 @@ class InterBlockAttnDecoderBlock(nn.Module):
         # FFN branch: separate depth mix (own proj/norm); extra slot is this layer's Δ_attn only.
         h_m = block_attn_res(blocks, partial_after_attn, self.mlp_res_proj, self.mlp_res_norm)
         delta_m = self.ffn(self.ln2(h_m))
-        # Parallel residuals: both sublayers add into the same stream (vs vanilla sequential x+attn then x+ffn).
+        # Parallel residuals: both sublayers add into the same stream
+        # (vs vanilla sequential x+attn then x+ffn).
         x_out = x + delta_a + delta_m
         partial_out = partial_after_attn + delta_m
 
