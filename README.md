@@ -337,15 +337,6 @@ Unedited notes: Docker one-liners, training logs, and chat transcripts from past
 <details>
 <summary><strong>Expand — raw logs, commands, and full table</strong></summary>
 
-### Raw paste (full log and commands)
-
-_Historical paste._ Long `docker compose` lines were merged where the original had accidental mid-flag wraps (e.g. after `--tokenizer-type`).
-
-docker compose run --rm -it chat --checkpoint "checkpoints/imdb_sentiment/hf_bpe_byte/best.pt" --max-tokens 240 --temperature 0.9 --top-p 0.9 --repetition-penalty 1.15
-
-docker compose run --rm train python scripts/train.py --epochs 20 --batch-size 16 --d-model 384 --num-heads 6 --num-layers 6 --d-ff 1536 --seq-len 256 --dropout 0.1 --tokenizer-type hf_bpe_byte --bpe-vocab-size 256 --tarnet-two-heads --tarnet-head-n-fc 2 --position-encoding sinusoidal --block-attn-residuals --macro-block-size 2 --max-block-representations 9 --checkpoint-dir checkpoints/counterfactual_new
-
-docker compose run --rm -it chat --checkpoint checkpoints/counterfactual_new/best.pt --max-tokens 240 --temperature 0.8 --method top_p --top-p 0.85  --counterfactual  --repetition-penalty 1.05
 
 ### IMDB ≈18–20M runs: training, validation, and sample quality (summary)
 
@@ -369,58 +360,13 @@ The logs below compare three **512-wide** IMDB runs (same `num_layers=6`, `d_ff=
 
 ---
 
-### Full training log — TARNet-style ≈20M-parameter run
-
+### Test Results TARNet-style ≈20M-parameter run
+```bash
 docker compose run --rm train python scripts/train.py --epochs 40 --batch-size 16 --d-model 512 --num-heads 8 --num-layers 6 --d-ff 1888 --seq-len 256 --dropout 0.1 --tokenizer-type hf_bpe_byte --bpe-vocab-size 256 --tarnet-two-heads --tarnet-head-n-fc 2 --position-encoding rope --block-attn-residuals --macro-block-size 2 --max-block-representations 9 --checkpoint-dir checkpoints/counterfactual_repeat_20m --tarnet-head-separation-weight 0.02
-
-INFO:nano_llm.train:Model config: d_model=512 num_heads=8 num_layers=6 d_ff=1888 seq_len=256 dropout=0.1
-INFO:nano_llm.train:Model parameters: total=20,040,768 trainable=20,040,768
-INFO:nano_llm.train:Epoch 1/40 train_loss=2.2577 val_loss=1.9603 val_ppl=7.10 val_bpb=1.599 train_ce=2.2579 val_ce=1.9605 lr=3.00e-04
-INFO:nano_llm.train:Epoch 2/40 train_loss=1.9285 val_loss=1.8604 val_ppl=6.43 val_bpb=1.518 train_ce=1.9288 val_ce=1.8606 lr=2.98e-04
-INFO:nano_llm.train:Epoch 3/40 train_loss=1.8450 val_loss=1.8089 val_ppl=6.10 val_bpb=1.476 train_ce=1.8453 val_ce=1.8092 lr=2.96e-04
-INFO:nano_llm.train:Epoch 4/40 train_loss=1.7943 val_loss=1.7763 val_ppl=5.91 val_bpb=1.449 train_ce=1.7946 val_ce=1.7766 lr=2.93e-04
-INFO:nano_llm.train:Epoch 5/40 train_loss=1.7571 val_loss=1.7520 val_ppl=5.77 val_bpb=1.429 train_ce=1.7574 val_ce=1.7522 lr=2.89e-04
-INFO:nano_llm.train:Epoch 6/40 train_loss=1.7277 val_loss=1.7351 val_ppl=5.67 val_bpb=1.415 train_ce=1.7280 val_ce=1.7354 lr=2.84e-04
-INFO:nano_llm.train:Epoch 7/40 train_loss=1.7035 val_loss=1.7203 val_ppl=5.59 val_bpb=1.403 train_ce=1.7038 val_ce=1.7206 lr=2.78e-04
-INFO:nano_llm.train:Epoch 8/40 train_loss=1.6826 val_loss=1.7091 val_ppl=5.52 val_bpb=1.394 train_ce=1.6830 val_ce=1.7094 lr=2.71e-04
-INFO:nano_llm.train:Epoch 9/40 train_loss=1.6641 val_loss=1.6993 val_ppl=5.47 val_bpb=1.386 train_ce=1.6645 val_ce=1.6996 lr=2.64e-04
-INFO:nano_llm.train:Epoch 10/40 train_loss=1.6476 val_loss=1.6914 val_ppl=5.43 val_bpb=1.380 train_ce=1.6480 val_ce=1.6917 lr=2.56e-04
-INFO:nano_llm.train:Epoch 11/40 train_loss=1.6321 val_loss=1.6831 val_ppl=5.38 val_bpb=1.373 train_ce=1.6325 val_ce=1.6834 lr=2.48e-04
-INFO:nano_llm.train:Epoch 12/40 train_loss=1.6178 val_loss=1.6775 val_ppl=5.35 val_bpb=1.368 train_ce=1.6182 val_ce=1.6778 lr=2.38e-04
-INFO:nano_llm.train:Epoch 13/40 train_loss=1.6047 val_loss=1.6716 val_ppl=5.32 val_bpb=1.364 train_ce=1.6051 val_ce=1.6719 lr=2.29e-04
-INFO:nano_llm.train:Epoch 14/40 train_loss=1.5922 val_loss=1.6688 val_ppl=5.31 val_bpb=1.361 train_ce=1.5926 val_ce=1.6691 lr=2.18e-04
-INFO:nano_llm.train:Epoch 15/40 train_loss=1.5802 val_loss=1.6659 val_ppl=5.29 val_bpb=1.359 train_ce=1.5806 val_ce=1.6662 lr=2.08e-04
-INFO:nano_llm.train:Epoch 16/40 train_loss=1.5689 val_loss=1.6608 val_ppl=5.26 val_bpb=1.355 train_ce=1.5693 val_ce=1.6611 lr=1.97e-04
-INFO:nano_llm.train:Epoch 17/40 train_loss=1.5576 val_loss=1.6581 val_ppl=5.25 val_bpb=1.353 train_ce=1.5581 val_ce=1.6585 lr=1.85e-04
-INFO:nano_llm.train:Epoch 18/40 train_loss=1.5474 val_loss=1.6570 val_ppl=5.24 val_bpb=1.352 train_ce=1.5478 val_ce=1.6573 lr=1.74e-04
-INFO:nano_llm.train:Epoch 19/40 train_loss=1.5370 val_loss=1.6530 val_ppl=5.22 val_bpb=1.348 train_ce=1.5374 val_ce=1.6533 lr=1.62e-04
-INFO:nano_llm.train:Epoch 20/40 train_loss=1.5271 val_loss=1.6520 val_ppl=5.22 val_bpb=1.348 train_ce=1.5275 val_ce=1.6524 lr=1.50e-04
-INFO:nano_llm.train:Epoch 21/40 train_loss=1.5173 val_loss=1.6543 val_ppl=5.23 val_bpb=1.349 train_ce=1.5177 val_ce=1.6546 lr=1.39e-04
-INFO:nano_llm.train:Epoch 22/40 train_loss=1.5080 val_loss=1.6510 val_ppl=5.21 val_bpb=1.347 train_ce=1.5084 val_ce=1.6513 lr=1.27e-04
-INFO:nano_llm.train:Epoch 23/40 train_loss=1.4987 val_loss=1.6519 val_ppl=5.22 val_bpb=1.347 train_ce=1.4992 val_ce=1.6523 lr=1.16e-04
-INFO:nano_llm.train:Epoch 24/40 train_loss=1.4901 val_loss=1.6522 val_ppl=5.22 val_bpb=1.348 train_ce=1.4906 val_ce=1.6526 lr=1.04e-04
-INFO:nano_llm.train:Epoch 25/40 train_loss=1.4815 val_loss=1.6503 val_ppl=5.21 val_bpb=1.346 train_ce=1.4820 val_ce=1.6507 lr=9.33e-05
-INFO:nano_llm.train:Epoch 26/40 train_loss=1.4733 val_loss=1.6534 val_ppl=5.22 val_bpb=1.349 train_ce=1.4738 val_ce=1.6538 lr=8.26e-05
-INFO:nano_llm.train:Epoch 27/40 train_loss=1.4654 val_loss=1.6523 val_ppl=5.22 val_bpb=1.348 train_ce=1.4659 val_ce=1.6527 lr=7.24e-05
-INFO:nano_llm.train:Epoch 28/40 train_loss=1.4579 val_loss=1.6560 val_ppl=5.24 val_bpb=1.351 train_ce=1.4584 val_ce=1.6563 lr=6.26e-05
-INFO:nano_llm.train:Epoch 29/40 train_loss=1.4509 val_loss=1.6541 val_ppl=5.23 val_bpb=1.349 train_ce=1.4514 val_ce=1.6545 lr=5.34e-05
-INFO:nano_llm.train:Epoch 30/40 train_loss=1.4443 val_loss=1.6561 val_ppl=5.24 val_bpb=1.351 train_ce=1.4448 val_ce=1.6565 lr=4.48e-05
-INFO:nano_llm.train:Epoch 31/40 train_loss=1.4385 val_loss=1.6554 val_ppl=5.24 val_bpb=1.350 train_ce=1.4390 val_ce=1.6558 lr=3.68e-05
-INFO:nano_llm.train:Epoch 32/40 train_loss=1.4327 val_loss=1.6586 val_ppl=5.25 val_bpb=1.353 train_ce=1.4333 val_ce=1.6590 lr=2.96e-05
-INFO:nano_llm.train:Epoch 33/40 train_loss=1.4278 val_loss=1.6594 val_ppl=5.26 val_bpb=1.354 train_ce=1.4284 val_ce=1.6598 lr=2.30e-05
-INFO:nano_llm.train:Epoch 34/40 train_loss=1.4235 val_loss=1.6608 val_ppl=5.26 val_bpb=1.355 train_ce=1.4240 val_ce=1.6612 lr=1.73e-05
-INFO:nano_llm.train:Epoch 35/40 train_loss=1.4198 val_loss=1.6631 val_ppl=5.28 val_bpb=1.357 train_ce=1.4203 val_ce=1.6636 lr=1.24e-05
-INFO:nano_llm.train:Epoch 36/40 train_loss=1.4168 val_loss=1.6626 val_ppl=5.27 val_bpb=1.356 train_ce=1.4174 val_ce=1.6630 lr=8.32e-06
-INFO:nano_llm.train:Epoch 37/40 train_loss=1.4141 val_loss=1.6635 val_ppl=5.28 val_bpb=1.357 train_ce=1.4146 val_ce=1.6639 lr=5.13e-06
-INFO:nano_llm.train:Epoch 38/40 train_loss=1.4123 val_loss=1.6638 val_ppl=5.28 val_bpb=1.357 train_ce=1.4129 val_ce=1.6642 lr=2.84e-06
-INFO:nano_llm.train:Epoch 39/40 train_loss=1.4110 val_loss=1.6640 val_ppl=5.28 val_bpb=1.357 train_ce=1.4116 val_ce=1.6644 lr=1.46e-06
-INFO:nano_llm.train:Epoch 40/40 train_loss=1.4102 val_loss=1.6645 val_ppl=5.28 val_bpb=1.358 train_ce=1.4108 val_ce=1.6649 lr=1.00e-06
-
-
-# Test Results
-
+```
+```bash
 docker compose run --rm -it chat --checkpoint checkpoints/counterfactual_repeat_20m/best.pt --max-tokens 340 --temperature 0.7 --method top_p --top-p 0.5 --counterfactual --repetition-penalty 1.5
-
+```
 Generate [+/-/b/q] (default b):
 
 [Y0]
