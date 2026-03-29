@@ -455,3 +455,9 @@ What a waste of time. To be honest, this is only the worst movie ever made! The 
 
 [Y1]
 Have you ever seen this movie? This is a superb film. The casting of the two leads, especially Sammo Hung as the woman whose father was born in Afghanistan and he did not get himself into being a parrot. I think that it's madly because it's strength and sentimentality is more out of place, as with most old movies they'll live without exceptional conversation.
+
+[Y0]
+When I saw this movie, it was full of crap. The acting is bad and the performances are wooden and the story line does not match up to me. And while that's becoming more than half of the film is obviously terrible, you've gotten a little bit into it as well as once in only times you see how shallow he is!
+
+[Y1]
+One of the best movies ever made. The story is about tragically changing his ways and doing something like this, as he prefers to become a genuinely fascinated (and industry) dreamer. And it's not so bad, it's good for those who hated that movie with young men whose family live on out and when the concept was before you seen the film in 1973! Timothy Spall was excellent as Spanjers, he played Amitabh Bachchan is good to watch; now I've seldom seen him more than this once? This movie is actual movie for you!
