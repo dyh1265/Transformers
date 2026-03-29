@@ -28,13 +28,6 @@ def main() -> None:
         help="Override tokenizer type used during HPO training trials",
     )
     p.add_argument(
-        "--dataset-id",
-        type=str,
-        choices=["tiny_shakespeare", "imdb_sentiment"],
-        default=None,
-        help="Override dataset used during HPO training trials",
-    )
-    p.add_argument(
         "--bpe-vocab-size",
         type=int,
         default=None,
@@ -49,7 +42,7 @@ def main() -> None:
         "--results-dir",
         type=str,
         default=None,
-        help="Output directory for HPO artifacts (default: hpo_results/<dataset_id>/<tokenizer_type>)",
+        help="Output directory for HPO artifacts (default: hpo_results/imdb_sentiment/<tokenizer_type>)",
     )
     p.add_argument("--8gb", dest="use_8gb", action="store_true", help="Use 8GB GPU bounds")
     p.add_argument(
@@ -89,7 +82,6 @@ def main() -> None:
         base_url=args.base_url,
         max_parse_retries=args.max_parse_retries,
         tokenizer_type=args.tokenizer_type,
-        dataset_id=args.dataset_id,
         bpe_vocab_size=args.bpe_vocab_size,
         bpe_word_boundary_aware=True if args.bpe_word_boundary_aware else None,
         results_dir=args.results_dir,

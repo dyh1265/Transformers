@@ -154,8 +154,8 @@ def test_generate_stops_on_stop_sequence() -> None:
     assert out.startswith("hello")
 
 
-def test_load_fallback_tokenizer_from_shakespeare() -> None:
-    """Test loading checkpoint without vocab raises when fallback disabled."""
+def test_load_raises_when_no_vocab_and_corpus_rebuild_disabled() -> None:
+    """Checkpoint without vocab/tokenizer_state raises when corpus rebuild is disabled."""
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "old_ckpt.pt"
         model = build_model(vocab_size=65, d_model=16, num_heads=2, num_layers=2, d_ff=64)
@@ -168,23 +168,33 @@ def test_load_fallback_tokenizer_from_shakespeare() -> None:
             path,
         )
         with pytest.raises(ValueError, match="missing 'vocab'"):
-            load_model_and_tokenizer(path, rebuild_tokenizer_from_shakespeare=False)
+            load_model_and_tokenizer(path, rebuild_tokenizer_from_corpus=False)
 
 
-@pytest.mark.integration
-def test_load_and_generate_with_shakespeare_fallback() -> None:
-    """Integration: load checkpoint without vocab, rebuild tokenizer from Tiny Shakespeare."""
+def test_load_and_generate_with_tokenizer_state() -> None:
+    """Load checkpoint using serialized tokenizer state (no HF corpus download)."""
+    vocab = [CharTokenizer.PAD_TOKEN, CharTokenizer.UNK_TOKEN] + [chr(i) for i in range(33, 96)]
+    tokenizer = CharTokenizer(vocab=vocab)
+    assert tokenizer.vocab_size == 65
     with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "no_vocab.pt"
+        path = Path(tmp) / "with_tok.pt"
         model = build_model(vocab_size=65, d_model=16, num_heads=2, num_layers=2, d_ff=64)
         torch.save(
             {
                 "model": model.state_dict(),
-                "config": {"d_model": 16, "num_heads": 2, "num_layers": 2, "d_ff": 64, "seq_len": 64},
+                "config": {
+                    "d_model": 16,
+                    "num_heads": 2,
+                    "num_layers": 2,
+                    "d_ff": 64,
+                    "seq_len": 64,
+                    "tokenizer_type": "char",
+                },
+                "tokenizer_state": tokenizer.to_state(),
             },
             path,
         )
         model, tokenizer, _ = load_model_and_tokenizer(path, device="cpu")
-    out = generate(model, tokenizer, "ROMEO:", max_new_tokens=5, method="greedy", seed=0, device="cpu")
+    out = generate(model, tokenizer, "HI", max_new_tokens=5, method="greedy", seed=0, device="cpu")
     assert isinstance(out, str)
-    assert out.startswith("ROMEO:")
+    assert out.startswith("HI")

@@ -26,14 +26,19 @@ def main() -> int:
     parser.add_argument(
         "--prompt",
         type=str,
-        default="ROMEO:",
-        help="Starting prompt",
+        default="<bos>[SENTIMENT] positive [/SENTIMENT] [REVIEW] ",
+        help="Starting prompt (use a prefix that matches your checkpoint, e.g. IMDB tags or TARNet command)",
     )
     parser.add_argument(
         "--head-id",
         type=int,
         default=None,
         help="TARNet two-head models: choose head 0 (Y0) or 1 (Y1). Default: 0.",
+    )
+    parser.add_argument(
+        "--shared-head",
+        action="store_true",
+        help="TARNet two-head models: sample from trunk/shared logits instead of Y0/Y1",
     )
     parser.add_argument(
         "--both-heads",
@@ -153,6 +158,7 @@ def main() -> int:
             tokenizer,
             prompt=args.prompt,
             head_id=args.head_id,
+            shared_head=args.shared_head,
             max_new_tokens=args.max_tokens,
             max_context=max_context,
             method=args.method,

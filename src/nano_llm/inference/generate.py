@@ -83,6 +83,7 @@ def generate(
     tokenizer: "CharTokenizer | BPETokenizer | ByteBPETokenizer | HFByteBPETokenizer",
     prompt: str,
     head_id: int | None = None,
+    shared_head: bool = False,
     max_new_tokens: int = 100,
     max_context: int = 128,
     method: str = "greedy",
@@ -130,7 +131,11 @@ def generate(
         x = torch.tensor([context], dtype=torch.long, device=device)
         with torch.no_grad():
             if hasattr(model, "tarnet_two_heads") and getattr(model, "tarnet_two_heads"):
-                logits = model(x, head_id=head_id)[0, -1]
+                if shared_head and hasattr(model, "tarnet_shared_head"):
+                    _, hidden = model(x, return_hidden=True)
+                    logits = model.tarnet_shared_head(hidden)[0, -1]
+                else:
+                    logits = model(x, head_id=head_id)[0, -1]
             else:
                 logits = model(x)[0, -1]
 

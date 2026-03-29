@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import torch
+import logging
 
 from nano_llm.model import build_model
 from nano_llm.tokenizer import (
@@ -15,6 +16,8 @@ from nano_llm.tokenizer import (
     build_tokenizer_from_text,
     tokenizer_from_state,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_checkpoint_state_dict(state: dict) -> dict:
@@ -38,7 +41,7 @@ def normalize_checkpoint_state_dict(state: dict) -> dict:
 def load_model_and_tokenizer(
     checkpoint_path: str | Path,
     device: str | torch.device | None = None,
-    rebuild_tokenizer_from_shakespeare: bool = True,
+    rebuild_tokenizer_from_corpus: bool = True,
 ) -> tuple[
     torch.nn.Module,
     CharTokenizer | BPETokenizer | ByteBPETokenizer | HFByteBPETokenizer,
@@ -46,8 +49,8 @@ def load_model_and_tokenizer(
 ]:
     """Load model, tokenizer, and config from a checkpoint.
 
-    If checkpoint has no 'vocab', rebuilds tokenizer from Tiny Shakespeare
-    when rebuild_tokenizer_from_shakespeare is True.
+    If checkpoint has no ``tokenizer_state`` / ``vocab``, rebuilds the tokenizer from a
+    small IMDB subset when ``rebuild_tokenizer_from_corpus`` is True (requires ``datasets``).
 
     Returns:
         (model, tokenizer, config)
@@ -58,12 +61,13 @@ def load_model_and_tokenizer(
     vocab = ckpt.get("vocab")
     if tokenizer_state is not None:
         tokenizer = tokenizer_from_state(tokenizer_state)
-    elif vocab is None and rebuild_tokenizer_from_shakespeare:
-        from nano_llm.data import load_tiny_shakespeare
+    elif vocab is None and rebuild_tokenizer_from_corpus:
+        from nano_llm.data import load_imdb_sentiment
 
-        train_text, val_text = load_tiny_shakespeare()
+        tr, va = load_imdb_sentiment(max_train_samples=2000, max_val_samples=500)
+        corpus = "\n".join(tr + va)
         tokenizer = build_tokenizer_from_text(
-            train_text + val_text,
+            corpus,
             tokenizer_type=str(cfg.get("tokenizer_type", "char")),
             bpe_vocab_size=int(cfg.get("bpe_vocab_size", 256)),
             bpe_word_boundary_aware=bool(cfg.get("bpe_word_boundary_aware", False)),
@@ -83,12 +87,13 @@ def load_model_and_tokenizer(
                 word_boundary_aware=bool(cfg.get("bpe_word_boundary_aware", False)),
             )
         elif tokenizer_type == "hf_bpe_byte":
-            if rebuild_tokenizer_from_shakespeare:
-                from nano_llm.data import load_tiny_shakespeare
+            if rebuild_tokenizer_from_corpus:
+                from nano_llm.data import load_imdb_sentiment
 
-                train_text, val_text = load_tiny_shakespeare()
+                tr, va = load_imdb_sentiment(max_train_samples=2000, max_val_samples=500)
+                corpus = "\n".join(tr + va)
                 tokenizer = build_tokenizer_from_text(
-                    train_text + val_text,
+                    corpus,
                     tokenizer_type="hf_bpe_byte",
                     bpe_vocab_size=int(cfg.get("bpe_vocab_size", 256)),
                     bpe_word_boundary_aware=bool(cfg.get("bpe_word_boundary_aware", False)),
@@ -96,14 +101,14 @@ def load_model_and_tokenizer(
             else:
                 raise ValueError(
                     "Checkpoint missing tokenizer_state for hf_bpe_byte tokenizer. "
-                    "Set rebuild_tokenizer_from_shakespeare=True or retrain checkpoint."
+                    "Set rebuild_tokenizer_from_corpus=True or retrain checkpoint."
                 )
         else:
             tokenizer = CharTokenizer(vocab=vocab)
     else:
         raise ValueError(
             "Checkpoint missing 'vocab'. Retrain with updated train.py, "
-            "or pass rebuild_tokenizer_from_shakespeare=True and ensure network access."
+            "or pass rebuild_tokenizer_from_corpus=True (needs Hugging Face ``datasets`` for IMDB)."
         )
     state = normalize_checkpoint_state_dict(ckpt["model"])
     max_len = int(cfg.get("seq_len", 128)) + 10

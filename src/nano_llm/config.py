@@ -24,12 +24,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "lr_min": 1e-6,
     "epochs": 5,
     "early_stopping_patience": 0,
-    "dataset_id": "tiny_shakespeare",
-    "wikitext_max_train_samples": None,
-    "wikitext_max_val_samples": None,
+    "dataset_id": "imdb_sentiment",
     "imdb_max_train_samples": None,
     "imdb_max_val_samples": None,
     "imdb_max_review_chars": None,
+    # imdb_sentiment: "tags" ([SENTIMENT]...) or "natural" (instruction string before [REVIEW])
+    "imdb_conditioning_style": "tags",
+    "imdb_positive_instruction": None,
+    "imdb_negative_instruction": None,
     "enable_counterfactual_objective": False,
     "counterfactual_ce_weight": 1.0,
     "counterfactual_embedding_weight": 0.25,
@@ -42,9 +44,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "tarnet_head0_hidden_dim": None,
     "tarnet_head1_n_fc": None,
     "tarnet_head1_hidden_dim": None,
-    "pg19_max_train_books": None,
-    "pg19_max_val_books": None,
-    "pg19_max_chars_per_book": None,
     "position_encoding": "sinusoidal",
     # Inter-block attention residuals (mix prior macro-block reps before attn/MLP)
     "block_attn_residuals": False,
@@ -69,7 +68,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "wandb_log_model": False,
 }
 
-# ~4M params, good for small-model + large-text experiments (books, etc.)
+# ~4M params, moderate-width baseline
 CONFIG_4M: dict[str, Any] = {
     **DEFAULT_CONFIG,
     "d_model": 256,

@@ -44,32 +44,6 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--batch-size", type=int, dest="batch_size", help="Batch size")
     p.add_argument(
-        "--dataset-id",
-        type=str,
-        dest="dataset_id",
-        choices=[
-            "tiny_shakespeare",
-            "wikitext_2",
-            "wikitext_103",
-            "imdb_sentiment",
-            "pg19",
-            "bookcorpus",
-        ],
-        help="Dataset ID",
-    )
-    p.add_argument(
-        "--wikitext-max-train-samples",
-        type=int,
-        dest="wikitext_max_train_samples",
-        help="Limit WikiText-2 train lines for faster pretrain",
-    )
-    p.add_argument(
-        "--wikitext-max-val-samples",
-        type=int,
-        dest="wikitext_max_val_samples",
-        help="Limit WikiText-2 validation lines",
-    )
-    p.add_argument(
         "--imdb-max-train-samples",
         type=int,
         dest="imdb_max_train_samples",
@@ -92,6 +66,25 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         dest="imdb_use_full_splits",
         help="Use full IMDB train/val splits (clears imdb_max_* limits from config file)",
+    )
+    p.add_argument(
+        "--imdb-conditioning-style",
+        type=str,
+        dest="imdb_conditioning_style",
+        choices=["tags", "natural"],
+        help='IMDB single-head prompt: "tags" ([SENTIMENT]...) or "natural" (instruction before [REVIEW])',
+    )
+    p.add_argument(
+        "--imdb-positive-instruction",
+        type=str,
+        dest="imdb_positive_instruction",
+        help="With --imdb-conditioning-style natural: text before [REVIEW] for positive reviews",
+    )
+    p.add_argument(
+        "--imdb-negative-instruction",
+        type=str,
+        dest="imdb_negative_instruction",
+        help="With --imdb-conditioning-style natural: text before [REVIEW] for negative reviews",
     )
     p.add_argument(
         "--enable-counterfactual-objective",
@@ -164,24 +157,6 @@ def parse_args() -> argparse.Namespace:
         type=float,
         dest="tarnet_head_separation_weight",
         help="TARNet: subtract this * JS(head0||head1) to discourage head collapse (default 0.0)",
-    )
-    p.add_argument(
-        "--pg19-max-train-books",
-        type=int,
-        dest="pg19_max_train_books",
-        help="Limit PG-19 train books for faster experiments",
-    )
-    p.add_argument(
-        "--pg19-max-val-books",
-        type=int,
-        dest="pg19_max_val_books",
-        help="Limit PG-19 val books",
-    )
-    p.add_argument(
-        "--pg19-max-chars-per-book",
-        type=int,
-        dest="pg19_max_chars_per_book",
-        help="Truncate each PG-19 book to at most N chars",
     )
     p.add_argument("--learning-rate", type=float, dest="learning_rate", help="Learning rate")
     p.add_argument(
@@ -282,126 +257,92 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def _build_overrides(args: argparse.Namespace) -> dict:
+    """Build config overrides from CLI args while preserving existing semantics."""
+    overrides: dict = {}
+
+    passthrough_keys = [
+        "d_model",
+        "num_heads",
+        "num_layers",
+        "d_ff",
+        "seq_len",
+        "dropout",
+        "tokenizer_type",
+        "bpe_vocab_size",
+        "batch_size",
+        "imdb_max_train_samples",
+        "imdb_max_val_samples",
+        "imdb_max_review_chars",
+        "imdb_conditioning_style",
+        "imdb_positive_instruction",
+        "imdb_negative_instruction",
+        "counterfactual_ce_weight",
+        "counterfactual_embedding_weight",
+        "tarnet_head_n_fc",
+        "tarnet_head_hidden_dim",
+        "tarnet_head0_n_fc",
+        "tarnet_head0_hidden_dim",
+        "tarnet_head1_n_fc",
+        "tarnet_head1_hidden_dim",
+        "imdb_tarnet_command_prompt",
+        "tarnet_head_separation_weight",
+        "learning_rate",
+        "lr_decay",
+        "lr_min",
+        "epochs",
+        "trial_id",
+        "checkpoint_dir",
+        "hpo_results_dir",
+        "position_encoding",
+        "early_stopping_patience",
+        "wandb_project",
+        "wandb_run_name",
+        "wandb_entity",
+        "wandb_tags",
+        "mixed_precision",
+        "macro_block_size",
+        "max_block_representations",
+    ]
+    for key in passthrough_keys:
+        value = getattr(args, key)
+        if value is not None:
+            overrides[key] = value
+
+    true_flags = [
+        "bpe_word_boundary_aware",
+        "enable_counterfactual_objective",
+        "tarnet_two_heads",
+        "use_wandb",
+        "wandb_log_model",
+        "torch_compile",
+        "block_attn_residuals",
+    ]
+    for key in true_flags:
+        if getattr(args, key):
+            overrides[key] = True
+
+    if args.imdb_use_full_splits:
+        overrides["imdb_max_train_samples"] = None
+        overrides["imdb_max_val_samples"] = None
+    if args.no_cuda_tf32:
+        overrides["cuda_allow_tf32"] = False
+    if args.no_cuda_flash_sdp:
+        overrides["cuda_prefer_flash_attn"] = False
+    # Preserve prior behavior: only set resume when non-empty.
+    if args.resume:
+        overrides["resume"] = args.resume
+
+    return overrides
+
+
 def main() -> None:
     args = parse_args()
     if args.config:
         config = load_config(args.config)
     else:
         config = dict(DEFAULT_CONFIG)
-
-    overrides = {}
-    if args.d_model is not None:
-        overrides["d_model"] = args.d_model
-    if args.num_heads is not None:
-        overrides["num_heads"] = args.num_heads
-    if args.num_layers is not None:
-        overrides["num_layers"] = args.num_layers
-    if args.d_ff is not None:
-        overrides["d_ff"] = args.d_ff
-    if args.seq_len is not None:
-        overrides["seq_len"] = args.seq_len
-    if args.dropout is not None:
-        overrides["dropout"] = args.dropout
-    if args.tokenizer_type is not None:
-        overrides["tokenizer_type"] = args.tokenizer_type
-    if args.bpe_vocab_size is not None:
-        overrides["bpe_vocab_size"] = args.bpe_vocab_size
-    if args.bpe_word_boundary_aware:
-        overrides["bpe_word_boundary_aware"] = True
-    if args.batch_size is not None:
-        overrides["batch_size"] = args.batch_size
-    if args.dataset_id is not None:
-        overrides["dataset_id"] = args.dataset_id
-    if args.wikitext_max_train_samples is not None:
-        overrides["wikitext_max_train_samples"] = args.wikitext_max_train_samples
-    if args.wikitext_max_val_samples is not None:
-        overrides["wikitext_max_val_samples"] = args.wikitext_max_val_samples
-    if args.imdb_max_train_samples is not None:
-        overrides["imdb_max_train_samples"] = args.imdb_max_train_samples
-    if args.imdb_max_val_samples is not None:
-        overrides["imdb_max_val_samples"] = args.imdb_max_val_samples
-    if args.imdb_max_review_chars is not None:
-        overrides["imdb_max_review_chars"] = args.imdb_max_review_chars
-    if args.imdb_use_full_splits:
-        overrides["imdb_max_train_samples"] = None
-        overrides["imdb_max_val_samples"] = None
-    if args.enable_counterfactual_objective:
-        overrides["enable_counterfactual_objective"] = True
-    if args.counterfactual_ce_weight is not None:
-        overrides["counterfactual_ce_weight"] = args.counterfactual_ce_weight
-    if args.counterfactual_embedding_weight is not None:
-        overrides["counterfactual_embedding_weight"] = args.counterfactual_embedding_weight
-    if args.tarnet_two_heads:
-        overrides["tarnet_two_heads"] = True
-    if args.tarnet_head_n_fc is not None:
-        overrides["tarnet_head_n_fc"] = args.tarnet_head_n_fc
-    if args.tarnet_head_hidden_dim is not None:
-        overrides["tarnet_head_hidden_dim"] = args.tarnet_head_hidden_dim
-    if args.tarnet_head0_n_fc is not None:
-        overrides["tarnet_head0_n_fc"] = args.tarnet_head0_n_fc
-    if args.tarnet_head0_hidden_dim is not None:
-        overrides["tarnet_head0_hidden_dim"] = args.tarnet_head0_hidden_dim
-    if args.tarnet_head1_n_fc is not None:
-        overrides["tarnet_head1_n_fc"] = args.tarnet_head1_n_fc
-    if args.tarnet_head1_hidden_dim is not None:
-        overrides["tarnet_head1_hidden_dim"] = args.tarnet_head1_hidden_dim
-    if args.imdb_tarnet_command_prompt is not None:
-        overrides["imdb_tarnet_command_prompt"] = args.imdb_tarnet_command_prompt
-    if args.tarnet_head_separation_weight is not None:
-        overrides["tarnet_head_separation_weight"] = args.tarnet_head_separation_weight
-    if args.pg19_max_train_books is not None:
-        overrides["pg19_max_train_books"] = args.pg19_max_train_books
-    if args.pg19_max_val_books is not None:
-        overrides["pg19_max_val_books"] = args.pg19_max_val_books
-    if args.pg19_max_chars_per_book is not None:
-        overrides["pg19_max_chars_per_book"] = args.pg19_max_chars_per_book
-    if args.learning_rate is not None:
-        overrides["learning_rate"] = args.learning_rate
-    if args.lr_decay is not None:
-        overrides["lr_decay"] = args.lr_decay
-    if args.lr_min is not None:
-        overrides["lr_min"] = args.lr_min
-    if args.epochs is not None:
-        overrides["epochs"] = args.epochs
-    if args.trial_id is not None:
-        overrides["trial_id"] = args.trial_id
-    if args.checkpoint_dir is not None:
-        overrides["checkpoint_dir"] = args.checkpoint_dir
-    if args.hpo_results_dir is not None:
-        overrides["hpo_results_dir"] = args.hpo_results_dir
-    if args.resume:
-        overrides["resume"] = args.resume
-    if args.position_encoding is not None:
-        overrides["position_encoding"] = args.position_encoding
-    if args.early_stopping_patience is not None:
-        overrides["early_stopping_patience"] = args.early_stopping_patience
-    if args.use_wandb:
-        overrides["use_wandb"] = True
-    if args.wandb_project is not None:
-        overrides["wandb_project"] = args.wandb_project
-    if args.wandb_run_name is not None:
-        overrides["wandb_run_name"] = args.wandb_run_name
-    if args.wandb_entity is not None:
-        overrides["wandb_entity"] = args.wandb_entity
-    if args.wandb_tags is not None:
-        overrides["wandb_tags"] = args.wandb_tags
-    if args.wandb_log_model:
-        overrides["wandb_log_model"] = True
-    if args.mixed_precision is not None:
-        overrides["mixed_precision"] = args.mixed_precision
-    if args.no_cuda_tf32:
-        overrides["cuda_allow_tf32"] = False
-    if args.no_cuda_flash_sdp:
-        overrides["cuda_prefer_flash_attn"] = False
-    if args.torch_compile:
-        overrides["torch_compile"] = True
-    if args.block_attn_residuals:
-        overrides["block_attn_residuals"] = True
-    if args.macro_block_size is not None:
-        overrides["macro_block_size"] = args.macro_block_size
-    if args.max_block_representations is not None:
-        overrides["max_block_representations"] = args.max_block_representations
-
+    overrides = _build_overrides(args)
     config.update(overrides)
     train(config)
 

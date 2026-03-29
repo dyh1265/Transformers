@@ -180,7 +180,6 @@ def tune(
     base_url: str = "http://localhost:11434/v1/",
     max_parse_retries: int = 2,
     tokenizer_type: str | None = None,
-    dataset_id: str | None = None,
     bpe_vocab_size: int | None = None,
     bpe_word_boundary_aware: bool | None = None,
     results_dir: str | None = None,
@@ -192,9 +191,7 @@ def tune(
 ) -> list[dict]:
     """Run HPO agent loop."""
     workspace = workspace or Path.cwd()
-    effective_dataset_id = (
-        str(dataset_id).lower() if dataset_id is not None else str(DEFAULT_CONFIG.get("dataset_id", "tiny_shakespeare"))
-    )
+    effective_dataset_id = str(DEFAULT_CONFIG.get("dataset_id", "imdb_sentiment"))
     effective_tokenizer_type = (
         str(tokenizer_type).lower() if tokenizer_type is not None else str(DEFAULT_CONFIG.get("tokenizer_type", "char"))
     )
@@ -207,7 +204,7 @@ def tune(
 
     trial_history: list[dict] = []
     seen_configs: set[tuple[Any, ...]] = set()
-    if effective_dataset_id == "imdb_sentiment" and (enable_counterfactual_objective or tarnet_two_heads):
+    if enable_counterfactual_objective or tarnet_two_heads:
         system_prompt = IMDB_TARNET_SYSTEM_PROMPT
     else:
         system_prompt = EIGHT_GB_SYSTEM_PROMPT if use_8gb_bounds else DEFAULT_SYSTEM_PROMPT
@@ -267,13 +264,11 @@ def tune(
             continue
         config["trial_id"] = trial_id
         config["hpo_results_dir"] = str(out_dir)
-        if dataset_id is not None:
-            config["dataset_id"] = dataset_id
-        if effective_dataset_id == "imdb_sentiment":
-            if imdb_max_train_samples is not None:
-                config["imdb_max_train_samples"] = int(imdb_max_train_samples)
-            if imdb_max_val_samples is not None:
-                config["imdb_max_val_samples"] = int(imdb_max_val_samples)
+        config["dataset_id"] = effective_dataset_id
+        if imdb_max_train_samples is not None:
+            config["imdb_max_train_samples"] = int(imdb_max_train_samples)
+        if imdb_max_val_samples is not None:
+            config["imdb_max_val_samples"] = int(imdb_max_val_samples)
         if tokenizer_type is not None:
             config["tokenizer_type"] = tokenizer_type
         if bpe_vocab_size is not None:

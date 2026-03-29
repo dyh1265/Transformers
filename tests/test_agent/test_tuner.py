@@ -81,7 +81,7 @@ def test_tune_writes_best_config(tmp_path: Path, monkeypatch) -> None:
 
     out = tune(max_trials=2, workspace=tmp_path)
     assert len(out) == 2
-    best_path = tmp_path / "hpo_results" / "tiny_shakespeare" / "char" / "best_config.json"
+    best_path = tmp_path / "hpo_results" / "imdb_sentiment" / "char" / "best_config.json"
     assert best_path.exists()
     data = json.loads(best_path.read_text())
     assert data["trial_id"] == 1

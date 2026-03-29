@@ -14,11 +14,7 @@ from nano_llm.data import (
     SENTIMENT_OPEN,
     create_dataloaders,
     format_imdb_example,
-    load_bookcorpus,
     load_imdb_sentiment,
-    load_pg19,
-    load_tiny_shakespeare,
-    load_wikitext_2,
     sentiment_to_treatment,
     _normalize_text,
     _strip_html,
@@ -26,49 +22,23 @@ from nano_llm.data import (
 from nano_llm.tokenizer import CharTokenizer
 
 
-def test_load_bookcorpus_returns_non_empty() -> None:
-    try:
-        train_text, val_text = load_bookcorpus(
-            max_train_books=2, max_val_books=1, max_chars_per_book=2000
-        )
-    except (ImportError, Exception) as e:
-        pytest.skip(f"BookCorpus load failed: {e}")
-    assert len(train_text) > 0
-    assert len(val_text) > 0
-
-
-def test_load_pg19_returns_non_empty() -> None:
-    try:
-        train_text, val_text = load_pg19(
-            max_train_books=2, max_val_books=1, max_chars_per_book=1000
-        )
-    except (ImportError, Exception) as e:
-        pytest.skip(f"PG-19 load failed (network/dataset): {e}")
-    assert len(train_text) > 0
-    assert len(val_text) > 0
-
-
-def test_load_wikitext_2_returns_non_empty() -> None:
-    try:
-        train_text, val_text = load_wikitext_2(max_train_samples=100, max_val_samples=50)
-    except ImportError:
-        pytest.skip("datasets package not installed")
-    assert len(train_text) > 0
-    assert len(val_text) > 0
-
-
-def test_load_dataset_returns_non_empty() -> None:
-    train_text, val_text = load_tiny_shakespeare(val_split=0.1)
-    assert len(train_text) > 0
-    assert len(val_text) > 0
+def _tiny_imdb_samples() -> tuple[list[str], list[str]]:
+    return (
+        [
+            format_imdb_example("Good film.", 1)[0],
+            format_imdb_example("Bad film.", 0)[0],
+        ],
+        [format_imdb_example("Okay.", 1)[0]],
+    )
 
 
 def test_create_dataloader_batch_shape() -> None:
-    train_text, val_text = load_tiny_shakespeare(val_split=0.1)
-    tokenizer = CharTokenizer.from_text(train_text, add_special=False)
-    train_loader, _ = create_dataloaders(train_text, val_text, tokenizer, seq_len=64, batch_size=8)
-    for x, y in train_loader:
-        assert x.shape[0] == 8
+    train_samples, val_samples = _tiny_imdb_samples()
+    tokenizer = CharTokenizer.from_text("\n".join(train_samples + val_samples), add_special=False)
+    train_loader, _ = create_dataloaders(train_samples, val_samples, tokenizer, seq_len=64, batch_size=2)
+    for batch in train_loader:
+        x, y = batch[0], batch[1]
+        assert x.shape[0] <= 2
         assert x.shape[1] == 63  # seq_len - 1 (input)
         assert y.shape[1] == 63
         assert isinstance(x, torch.Tensor)
@@ -77,14 +47,16 @@ def test_create_dataloader_batch_shape() -> None:
 
 
 def test_chunks_no_overlap_when_stride_equals_seq_len() -> None:
-    train_text, val_text = load_tiny_shakespeare(val_split=0.1)
-    tokenizer = CharTokenizer.from_text(train_text, add_special=False)
+    train_samples, val_samples = _tiny_imdb_samples()
+    tokenizer = CharTokenizer.from_text("\n".join(train_samples + val_samples), add_special=False)
     train_loader, _ = create_dataloaders(
-        train_text, val_text, tokenizer, seq_len=128, batch_size=4, stride=128
+        train_samples, val_samples, tokenizer, seq_len=128, batch_size=1, stride=128
     )
-    for x, y in train_loader:
-        assert x.shape == (4, 127)
-        assert y.shape == (4, 127)
+    for batch in train_loader:
+        x, y = batch[0], batch[1]
+        assert x.shape[0] == 1
+        assert x.shape[1] == 127
+        assert y.shape == x.shape
         break
 
 

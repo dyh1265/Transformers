@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import torch
 import torch.nn as nn
 
@@ -96,6 +98,10 @@ def _zero_init_fully_connected_output(fc: FullyConnected) -> None:
 
 class NanoLLM(nn.Module):
     """Decoder-only transformer for next-token prediction.
+
+    Decoder trunk: ``block_attn_residuals=False`` (default) uses a **vanilla** pre-norm
+    stack (``DecoderBlock``). ``block_attn_residuals=True`` uses inter-block residual
+    layers (``InterBlockAttnDecoderBlock``). See ``decoder_stack``.
 
     TARNet two-head mode: the trunk produces a hidden state per position; a **shared**
     head predicts vocabulary logits (treatment-agnostic "review content"), and two
@@ -225,6 +231,32 @@ class NanoLLM(nn.Module):
                 use_bias=False,
             )
 
+    @property
+    def decoder_stack(self) -> Literal["vanilla", "inter_block"]:
+        """``vanilla``: sequential ``DecoderBlock`` stack. ``inter_block``: ``InterBlockAttnDecoderBlock``."""
+        return "inter_block" if self.block_attn_residuals else "vanilla"
+
+    def _run_vanilla_decoder_stack(self, x: torch.Tensor) -> torch.Tensor:
+        """GPT-style pre-norm stack: each layer is x + Attn(LN(x)); x + FFN(LN(x))."""
+        for block in self.blocks:
+            x = block(x)
+        return x
+
+    def _run_inter_block_decoder_stack(self, x: torch.Tensor) -> torch.Tensor:
+        """Macro-block memory + depth-wise mixing before each sublayer (see ``InterBlockAttnDecoderBlock``)."""
+        blocks: list[torch.Tensor] = [x]
+        partial: torch.Tensor | None = None
+        for li, block in enumerate(self.blocks):
+            x, blocks, partial = block(
+                x,
+                blocks,
+                partial,
+                layer_index=li,
+                macro_block_size=self.macro_block_size,
+            )
+            blocks = trim_blocks(blocks, self.max_block_representations)
+        return x
+
     def forward(
         self,
         x: torch.Tensor,
@@ -240,21 +272,10 @@ class NanoLLM(nn.Module):
         x = self.embed(x)
         if self.pos_enc is not None:
             x = self.pos_enc(x)
-        if self.block_attn_residuals:
-            blocks: list[torch.Tensor] = [x]
-            partial: torch.Tensor | None = None
-            for li, block in enumerate(self.blocks):
-                x, blocks, partial = block(
-                    x,
-                    blocks,
-                    partial,
-                    layer_index=li,
-                    macro_block_size=self.macro_block_size,
-                )
-                blocks = trim_blocks(blocks, self.max_block_representations)
+        if self.decoder_stack == "vanilla":
+            x = self._run_vanilla_decoder_stack(x)
         else:
-            for block in self.blocks:
-                x = block(x)
+            x = self._run_inter_block_decoder_stack(x)
         x = self.ln_f(x)
         hidden = x
         if self.tarnet_two_heads:

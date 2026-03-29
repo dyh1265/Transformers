@@ -9,7 +9,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from nano_llm.data import REVIEW_CLOSE, REVIEW_OPEN, SENTIMENT_CLOSE, SENTIMENT_OPEN
+from nano_llm.data import (
+    IMDB_DEFAULT_NEGATIVE_INSTRUCTION,
+    IMDB_DEFAULT_POSITIVE_INSTRUCTION,
+    REVIEW_CLOSE,
+    REVIEW_OPEN,
+    SENTIMENT_CLOSE,
+    SENTIMENT_OPEN,
+)
 from nano_llm.inference import generate as gen_fn
 from nano_llm.inference import generate_both_heads as gen_both_fn
 from nano_llm.inference import load_model_and_tokenizer
@@ -59,6 +66,11 @@ def main() -> int:
         help="TARNet two-head models: choose head 0 (Y0) or 1 (Y1). If set, sentiment prompt is ignored.",
     )
     p.add_argument(
+        "--shared-head",
+        action="store_true",
+        help="TARNet two-head models: generate from trunk/shared logits (ignores sentiment/head-id).",
+    )
+    p.add_argument(
         "--counterfactual",
         action="store_true",
         help="For TARNet two-head checkpoints: generate and print both Y0 and Y1 each turn.",
@@ -80,7 +92,7 @@ def main() -> int:
     model, tokenizer, config = load_model_and_tokenizer(
         args.checkpoint,
         device=args.device or ("cuda" if __import__("torch").cuda.is_available() else "cpu"),
-        rebuild_tokenizer_from_shakespeare=False,
+        rebuild_tokenizer_from_corpus=False,
     )
     max_context = int(config.get("seq_len", 128))
 
@@ -167,12 +179,22 @@ def main() -> int:
                 print(f"\n[{label}]\n{review}\n", flush=True)
             continue
 
-        if args.head_id is None:
+        if args.shared_head:
+            sentiment = "shared"
+            prefix = f"<bos>{args.command_prompt} {REVIEW_OPEN} "
+        elif args.head_id is None:
             sentiment = _prompt_for_sentiment()
             if sentiment is None:
                 print("Bye.", flush=True)
                 return 0
-            prefix = f"<bos>{SENTIMENT_OPEN} {sentiment} {SENTIMENT_CLOSE} {REVIEW_OPEN} "
+            style = str(config.get("imdb_conditioning_style", "tags")).strip().lower()
+            if style == "natural":
+                pos_i = config.get("imdb_positive_instruction") or IMDB_DEFAULT_POSITIVE_INSTRUCTION
+                neg_i = config.get("imdb_negative_instruction") or IMDB_DEFAULT_NEGATIVE_INSTRUCTION
+                instr = pos_i if sentiment == "positive" else neg_i
+                prefix = f"<bos>{instr} {REVIEW_OPEN} "
+            else:
+                prefix = f"<bos>{SENTIMENT_OPEN} {sentiment} {SENTIMENT_CLOSE} {REVIEW_OPEN} "
         else:
             sentiment = "head_" + str(args.head_id)
             prefix = f"<bos>{args.command_prompt} {REVIEW_OPEN} "
@@ -181,6 +203,7 @@ def main() -> int:
             tokenizer,
             prompt=prefix,
             head_id=args.head_id,
+            shared_head=args.shared_head,
             max_new_tokens=args.max_tokens,
             max_context=max_context,
             method=args.method,
