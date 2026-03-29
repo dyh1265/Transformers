@@ -21,11 +21,7 @@ from nano_llm.config import DEFAULT_CONFIG
 from nano_llm.data import PAD_TARGET_IGNORE_INDEX, create_dataloaders, load_imdb_sentiment
 from nano_llm.inference.load import normalize_checkpoint_state_dict
 from nano_llm.model import build_model
-from nano_llm.tokenizer import (
-    CharTokenizer,
-    build_tokenizer_from_text,
-    tokenizer_from_state,
-)
+from nano_llm.tokenizer import build_tokenizer_from_text, tokenizer_from_state
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -239,9 +235,14 @@ def train(config: dict | None = None) -> dict:
     train_text = "\n".join(train_samples)
     val_text = "\n".join(val_samples)
     resume_path = cfg.get("resume")
-    tokenizer_type = str(cfg.get("tokenizer_type", "char")).lower()
-    bpe_vocab_size = int(cfg.get("bpe_vocab_size", 256))
+    bpe_vocab_size = int(cfg.get("bpe_vocab_size", 8000))
     bpe_word_boundary_aware = bool(cfg.get("bpe_word_boundary_aware", False))
+    tt = str(cfg.get("tokenizer_type", "hf_bpe_byte")).lower()
+    if tt != "hf_bpe_byte":
+        logger.warning(
+            "tokenizer_type=%r is ignored; only hf_bpe_byte is supported", tt
+        )
+    cfg["tokenizer_type"] = "hf_bpe_byte"
     if resume_path and Path(resume_path).exists():
         logger.info("Resuming from checkpoint %s", resume_path)
         ckpt = torch.load(resume_path, map_location="cpu", weights_only=True)
@@ -266,19 +267,20 @@ def train(config: dict | None = None) -> dict:
         vocab = ckpt.get("vocab")
         if tok_state:
             tokenizer = tokenizer_from_state(tok_state)
-        elif vocab:
-            tokenizer = CharTokenizer(vocab=vocab)
+        elif vocab is not None:
+            raise ValueError(
+                "Checkpoint has legacy list `vocab` but no `tokenizer_state`. "
+                "Only Hugging Face byte-level BPE (hf_bpe_byte) is supported; retrain or add tokenizer_state."
+            )
         else:
             tokenizer = build_tokenizer_from_text(
                 train_text + val_text,
-                tokenizer_type=tokenizer_type,
                 bpe_vocab_size=bpe_vocab_size,
                 bpe_word_boundary_aware=bpe_word_boundary_aware,
             )
     else:
         tokenizer = build_tokenizer_from_text(
             train_text + val_text,
-            tokenizer_type=tokenizer_type,
             bpe_vocab_size=bpe_vocab_size,
             bpe_word_boundary_aware=bpe_word_boundary_aware,
         )

@@ -179,7 +179,6 @@ def tune(
     use_8gb_bounds: bool = False,
     base_url: str = "http://localhost:11434/v1/",
     max_parse_retries: int = 2,
-    tokenizer_type: str | None = None,
     bpe_vocab_size: int | None = None,
     bpe_word_boundary_aware: bool | None = None,
     results_dir: str | None = None,
@@ -192,9 +191,7 @@ def tune(
     """Run HPO agent loop."""
     workspace = workspace or Path.cwd()
     effective_dataset_id = str(DEFAULT_CONFIG.get("dataset_id", "imdb_sentiment"))
-    effective_tokenizer_type = (
-        str(tokenizer_type).lower() if tokenizer_type is not None else str(DEFAULT_CONFIG.get("tokenizer_type", "char"))
-    )
+    effective_tokenizer_type = str(DEFAULT_CONFIG.get("tokenizer_type", "hf_bpe_byte"))
     if results_dir is not None:
         out_dir_cfg = Path(results_dir)
         out_dir = out_dir_cfg if out_dir_cfg.is_absolute() else workspace / out_dir_cfg
@@ -265,12 +262,11 @@ def tune(
         config["trial_id"] = trial_id
         config["hpo_results_dir"] = str(out_dir)
         config["dataset_id"] = effective_dataset_id
+        config["tokenizer_type"] = effective_tokenizer_type
         if imdb_max_train_samples is not None:
             config["imdb_max_train_samples"] = int(imdb_max_train_samples)
         if imdb_max_val_samples is not None:
             config["imdb_max_val_samples"] = int(imdb_max_val_samples)
-        if tokenizer_type is not None:
-            config["tokenizer_type"] = tokenizer_type
         if bpe_vocab_size is not None:
             config["bpe_vocab_size"] = int(bpe_vocab_size)
         if bpe_word_boundary_aware is not None:

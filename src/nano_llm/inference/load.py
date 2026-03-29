@@ -8,14 +8,7 @@ import torch
 import logging
 
 from nano_llm.model import build_model
-from nano_llm.tokenizer import (
-    BPETokenizer,
-    ByteBPETokenizer,
-    CharTokenizer,
-    HFByteBPETokenizer,
-    build_tokenizer_from_text,
-    tokenizer_from_state,
-)
+from nano_llm.tokenizer import HFByteBPETokenizer, build_tokenizer_from_text, tokenizer_from_state
 
 logger = logging.getLogger(__name__)
 
@@ -42,15 +35,11 @@ def load_model_and_tokenizer(
     checkpoint_path: str | Path,
     device: str | torch.device | None = None,
     rebuild_tokenizer_from_corpus: bool = True,
-) -> tuple[
-    torch.nn.Module,
-    CharTokenizer | BPETokenizer | ByteBPETokenizer | HFByteBPETokenizer,
-    dict,
-]:
+) -> tuple[torch.nn.Module, HFByteBPETokenizer, dict]:
     """Load model, tokenizer, and config from a checkpoint.
 
-    If checkpoint has no ``tokenizer_state`` / ``vocab``, rebuilds the tokenizer from a
-    small IMDB subset when ``rebuild_tokenizer_from_corpus`` is True (requires ``datasets``).
+    Expects ``tokenizer_state`` (hf_bpe_byte JSON) or, if missing,
+    ``rebuild_tokenizer_from_corpus=True`` to train a new tokenizer on a small IMDB slice.
 
     Returns:
         (model, tokenizer, config)
@@ -61,53 +50,24 @@ def load_model_and_tokenizer(
     vocab = ckpt.get("vocab")
     if tokenizer_state is not None:
         tokenizer = tokenizer_from_state(tokenizer_state)
-    elif vocab is None and rebuild_tokenizer_from_corpus:
+    elif rebuild_tokenizer_from_corpus:
         from nano_llm.data import load_imdb_sentiment
 
         tr, va = load_imdb_sentiment(max_train_samples=2000, max_val_samples=500)
         corpus = "\n".join(tr + va)
         tokenizer = build_tokenizer_from_text(
             corpus,
-            tokenizer_type=str(cfg.get("tokenizer_type", "char")),
-            bpe_vocab_size=int(cfg.get("bpe_vocab_size", 256)),
+            bpe_vocab_size=int(cfg.get("bpe_vocab_size", 8000)),
             bpe_word_boundary_aware=bool(cfg.get("bpe_word_boundary_aware", False)),
         )
     elif vocab is not None:
-        tokenizer_type = str(cfg.get("tokenizer_type", "char")).lower()
-        if tokenizer_type == "bpe":
-            tokenizer = BPETokenizer(
-                vocab=vocab,
-                merges=[],
-                word_boundary_aware=bool(cfg.get("bpe_word_boundary_aware", False)),
-            )
-        elif tokenizer_type == "bpe_byte":
-            tokenizer = ByteBPETokenizer(
-                vocab=vocab,
-                merges=[],
-                word_boundary_aware=bool(cfg.get("bpe_word_boundary_aware", False)),
-            )
-        elif tokenizer_type == "hf_bpe_byte":
-            if rebuild_tokenizer_from_corpus:
-                from nano_llm.data import load_imdb_sentiment
-
-                tr, va = load_imdb_sentiment(max_train_samples=2000, max_val_samples=500)
-                corpus = "\n".join(tr + va)
-                tokenizer = build_tokenizer_from_text(
-                    corpus,
-                    tokenizer_type="hf_bpe_byte",
-                    bpe_vocab_size=int(cfg.get("bpe_vocab_size", 256)),
-                    bpe_word_boundary_aware=bool(cfg.get("bpe_word_boundary_aware", False)),
-                )
-            else:
-                raise ValueError(
-                    "Checkpoint missing tokenizer_state for hf_bpe_byte tokenizer. "
-                    "Set rebuild_tokenizer_from_corpus=True or retrain checkpoint."
-                )
-        else:
-            tokenizer = CharTokenizer(vocab=vocab)
+        raise ValueError(
+            "Checkpoint has legacy `vocab` list without `tokenizer_state`. "
+            "Only hf_bpe_byte is supported; retrain or pass rebuild_tokenizer_from_corpus=True."
+        )
     else:
         raise ValueError(
-            "Checkpoint missing 'vocab'. Retrain with updated train.py, "
+            "Checkpoint missing tokenizer_state. Retrain with current train.py, "
             "or pass rebuild_tokenizer_from_corpus=True (needs Hugging Face ``datasets`` for IMDB)."
         )
     state = normalize_checkpoint_state_dict(ckpt["model"])

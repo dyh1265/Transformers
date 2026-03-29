@@ -34,7 +34,7 @@ def sanitize_output(text: str) -> str:
     return text
 
 if TYPE_CHECKING:
-    from nano_llm.tokenizer import BPETokenizer, ByteBPETokenizer, CharTokenizer, HFByteBPETokenizer
+    from nano_llm.tokenizer import HFByteBPETokenizer
 
 
 def _greedy_sample(logits: torch.Tensor) -> int:
@@ -80,7 +80,7 @@ def _apply_repetition_penalty(
 
 def generate(
     model: torch.nn.Module,
-    tokenizer: "CharTokenizer | BPETokenizer | ByteBPETokenizer | HFByteBPETokenizer",
+    tokenizer: "HFByteBPETokenizer",
     prompt: str,
     head_id: int | None = None,
     shared_head: bool = False,
@@ -101,7 +101,7 @@ def generate(
 
     Args:
         model: NanoLLM model (in eval mode).
-        tokenizer: CharTokenizer.
+        tokenizer: HFByteBPETokenizer.
         prompt: Starting text.
         max_new_tokens: Maximum tokens to generate.
         max_context: Max context length (sliding window).
@@ -173,7 +173,7 @@ def generate(
 
 def generate_both_heads(
     model: torch.nn.Module,
-    tokenizer: "CharTokenizer | BPETokenizer | ByteBPETokenizer | HFByteBPETokenizer",
+    tokenizer: "HFByteBPETokenizer",
     prompt: str,
     *,
     max_new_tokens: int = 100,

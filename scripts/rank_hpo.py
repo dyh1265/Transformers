@@ -22,7 +22,7 @@ def main() -> None:
             {
                 "trial_id": d.get("trial_id"),
                 "results_dir": str(p.parent).replace("\\", "/"),
-                "tokenizer_type": d.get("config", {}).get("tokenizer_type", "char"),
+                "tokenizer_type": d.get("config", {}).get("tokenizer_type", "hf_bpe_byte"),
                 "bpe_vocab_size": d.get("config", {}).get("bpe_vocab_size"),
                 "best_val_bits_per_byte": float(d.get("best_val_bits_per_byte", float("inf"))),
                 "best_val_perplexity": float(d.get("best_val_perplexity", float("inf"))),

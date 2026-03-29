@@ -10,7 +10,7 @@ from typing import Any
 import torch
 from torch.utils.data import Dataset
 
-from nano_llm.tokenizer import BPETokenizer, ByteBPETokenizer, CharTokenizer, HFByteBPETokenizer
+from nano_llm.tokenizer import HFByteBPETokenizer
 
 SENTIMENT_OPEN = "[SENTIMENT]"
 SENTIMENT_CLOSE = "[/SENTIMENT]"
@@ -296,7 +296,7 @@ class IMDBDataset(Dataset):
     def __init__(
         self,
         samples: list[str],
-        tokenizer: CharTokenizer | BPETokenizer | ByteBPETokenizer | HFByteBPETokenizer,
+        tokenizer: HFByteBPETokenizer,
         seq_len: int = 128,
         stride: int | None = None,
         *,
@@ -350,7 +350,7 @@ class IMDBDataset(Dataset):
     @staticmethod
     def _chunk_sample_with_review_mask(
         sample: str,
-        tokenizer: CharTokenizer | BPETokenizer | ByteBPETokenizer | HFByteBPETokenizer,
+        tokenizer: HFByteBPETokenizer,
         *,
         seq_len: int,
         stride: int,
@@ -458,7 +458,7 @@ class IMDBTARNetDataset(Dataset):
     def __init__(
         self,
         samples: list[str],
-        tokenizer: CharTokenizer | BPETokenizer | ByteBPETokenizer | HFByteBPETokenizer,
+        tokenizer: HFByteBPETokenizer,
         seq_len: int = 128,
         stride: int | None = None,
         *,
@@ -514,7 +514,7 @@ class IMDBTARNetDataset(Dataset):
 def create_dataloaders(
     train_samples: list[str],
     val_samples: list[str],
-    tokenizer: CharTokenizer | BPETokenizer | ByteBPETokenizer | HFByteBPETokenizer,
+    tokenizer: HFByteBPETokenizer,
     seq_len: int = 128,
     batch_size: int = 32,
     stride: int | None = None,

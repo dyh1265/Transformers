@@ -21,17 +21,10 @@ def main() -> None:
     p.add_argument("--base-url", type=str, default="http://localhost:11434/v1/")
     p.add_argument("--max-parse-retries", type=int, default=2)
     p.add_argument(
-        "--tokenizer-type",
-        type=str,
-        choices=["char", "bpe", "bpe_byte", "hf_bpe_byte"],
-        default=None,
-        help="Override tokenizer type used during HPO training trials",
-    )
-    p.add_argument(
         "--bpe-vocab-size",
         type=int,
         default=None,
-        help="Override BPE vocab size (used when tokenizer-type=bpe, bpe_byte, or hf_bpe_byte)",
+        help="Override HF byte-level BPE vocab size during HPO trials",
     )
     p.add_argument(
         "--bpe-word-boundary-aware",
@@ -81,7 +74,6 @@ def main() -> None:
         use_8gb_bounds=args.use_8gb,
         base_url=args.base_url,
         max_parse_retries=args.max_parse_retries,
-        tokenizer_type=args.tokenizer_type,
         bpe_vocab_size=args.bpe_vocab_size,
         bpe_word_boundary_aware=True if args.bpe_word_boundary_aware else None,
         results_dir=args.results_dir,

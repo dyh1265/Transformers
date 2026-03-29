@@ -19,7 +19,7 @@ from nano_llm.data import (
     _normalize_text,
     _strip_html,
 )
-from nano_llm.tokenizer import CharTokenizer
+from nano_llm.tokenizer import HFByteBPETokenizer
 
 
 def _tiny_imdb_samples() -> tuple[list[str], list[str]]:
@@ -33,8 +33,9 @@ def _tiny_imdb_samples() -> tuple[list[str], list[str]]:
 
 
 def test_create_dataloader_batch_shape() -> None:
+    pytest.importorskip("tokenizers")
     train_samples, val_samples = _tiny_imdb_samples()
-    tokenizer = CharTokenizer.from_text("\n".join(train_samples + val_samples), add_special=False)
+    tokenizer = HFByteBPETokenizer.from_text("\n".join(train_samples + val_samples), vocab_size=128)
     train_loader, _ = create_dataloaders(train_samples, val_samples, tokenizer, seq_len=64, batch_size=2)
     for batch in train_loader:
         x, y = batch[0], batch[1]
@@ -47,8 +48,9 @@ def test_create_dataloader_batch_shape() -> None:
 
 
 def test_chunks_no_overlap_when_stride_equals_seq_len() -> None:
+    pytest.importorskip("tokenizers")
     train_samples, val_samples = _tiny_imdb_samples()
-    tokenizer = CharTokenizer.from_text("\n".join(train_samples + val_samples), add_special=False)
+    tokenizer = HFByteBPETokenizer.from_text("\n".join(train_samples + val_samples), vocab_size=128)
     train_loader, _ = create_dataloaders(
         train_samples, val_samples, tokenizer, seq_len=128, batch_size=1, stride=128
     )
@@ -123,11 +125,12 @@ def test_load_imdb_subsample_is_label_stratified() -> None:
 
 
 def test_imdb_dataset_chunks_keep_sentiment_prefix() -> None:
+    pytest.importorskip("tokenizers")
     samples = [
         format_imdb_example("Short positive review here.", 1)[0],
         format_imdb_example("A " + "long " * 80 + "positive review.", 1)[0],
     ]
-    tokenizer = CharTokenizer.from_text("\n".join(samples), add_special=False)
+    tokenizer = HFByteBPETokenizer.from_text("\n".join(samples), vocab_size=128)
     ds = IMDBDataset(samples, tokenizer, seq_len=64)
     assert len(ds) >= 2
     for i in range(min(5, len(ds))):
@@ -153,8 +156,9 @@ def test_sentiment_to_treatment_mapping() -> None:
 
 
 def test_imdb_dataset_returns_counterfactual_fields() -> None:
+    pytest.importorskip("tokenizers")
     samples = [format_imdb_example("An enjoyable movie with great pacing.", 1)[0]]
-    tokenizer = CharTokenizer.from_text("\n".join(samples), add_special=False)
+    tokenizer = HFByteBPETokenizer.from_text("\n".join(samples), vocab_size=128)
     ds = IMDBDataset(samples, tokenizer, seq_len=64)
     x, y, treatment, review_mask, x_pos, x_neg, review_mask_pos, review_mask_neg = ds[0]
     assert x.shape == y.shape

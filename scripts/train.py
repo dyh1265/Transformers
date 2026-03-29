@@ -24,17 +24,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seq-len", type=int, dest="seq_len", help="Sequence length")
     p.add_argument("--dropout", type=float, help="Dropout rate")
     p.add_argument(
-        "--tokenizer-type",
-        type=str,
-        dest="tokenizer_type",
-        choices=["char", "bpe", "bpe_byte", "hf_bpe_byte"],
-        help="Tokenizer type: char, bpe, bpe_byte, or hf_bpe_byte",
-    )
-    p.add_argument(
         "--bpe-vocab-size",
         type=int,
         dest="bpe_vocab_size",
-        help="BPE vocab size (used when tokenizer_type=bpe or bpe_byte)",
+        help="HF byte-level BPE vocab size (default from config)",
     )
     p.add_argument(
         "--bpe-word-boundary-aware",
@@ -268,7 +261,6 @@ def _build_overrides(args: argparse.Namespace) -> dict:
         "d_ff",
         "seq_len",
         "dropout",
-        "tokenizer_type",
         "bpe_vocab_size",
         "batch_size",
         "imdb_max_train_samples",

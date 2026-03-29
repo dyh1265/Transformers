@@ -9,7 +9,7 @@ import torch
 from nano_llm.config import DEFAULT_CONFIG
 from nano_llm.data import PAD_TARGET_IGNORE_INDEX, create_dataloaders, format_imdb_example
 from nano_llm.model import build_model
-from nano_llm.tokenizer import CharTokenizer
+from nano_llm.tokenizer import HFByteBPETokenizer
 from nano_llm.train import train
 import nano_llm.train as train_module
 
@@ -30,13 +30,14 @@ def test_one_training_step_loss_finite() -> None:
 
 @pytest.mark.integration
 def test_checkpoint_save_and_load() -> None:
+    pytest.importorskip("tokenizers")
     train_samples = [
         format_imdb_example("Short positive.", 1)[0],
         format_imdb_example("Short negative.", 0)[0],
     ]
     val_samples = [format_imdb_example("Val positive.", 1)[0]]
     corpus = "\n".join(train_samples + val_samples)
-    tokenizer = CharTokenizer.from_text(corpus, add_special=False)
+    tokenizer = HFByteBPETokenizer.from_text(corpus, vocab_size=256)
     model = build_model(
         vocab_size=tokenizer.vocab_size,
         d_model=32,
