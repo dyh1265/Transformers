@@ -57,7 +57,18 @@ This repo is a small **from-scratch** decoder LM; beyond the baseline stack, it 
 | **TARNet-like training**        | `--tarnet-two-heads`: one trunk, `logits_shared + Δ_k` readouts, factual **treatment** `T`, **weighted CE** on the active head, optional **JS** separation (`tarnet_head_separation_weight`). Diagram, equation, shared-head rationale, and inference (`--counterfactual`): [TARNet under Architecture](#architecture).                                                                                                                                                                                                                |
 
 
-**Papers.** Macro-block depth mixing is in the same family as **Block AttnRes** in *[Attention Residuals](https://arxiv.org/abs/2603.15031)* (Kimi Team, 2026). Conceptual background and how it maps to this repo: [vanilla vs inter-block decoder](docs/vanilla_vs_inter_block_decoder.md). Dual-head training here is **inspired by** TARNet’s shared encoder and treatment-specific heads in *[Estimating individual treatment effect: generalization bounds and algorithms](https://arxiv.org/abs/1606.03976)* (Shalit, Johansson & Sontag)—adapted to next-token LM loss, not the paper’s causal ITE objective.
+**Papers.**
+
+**Attention residuals (decoder).** Macro-block depth mixing is in the same family as **Block AttnRes** in *[Attention Residuals](https://arxiv.org/abs/2603.15031)* (Kimi Team, 2026). Conceptual background and how it maps to this repo: [vanilla vs inter-block decoder](docs/vanilla_vs_inter_block_decoder.md).
+
+**TARNet (classical ITE).** Dual-head training here is **inspired by** shared encoders and treatment-specific heads in *[Estimating individual treatment effect: generalization bounds and algorithms](https://arxiv.org/abs/1606.03976)* (Shalit, Johansson & Sontag)—adapted to next-token LM loss, not the paper’s observational ITE setup.
+
+**Counterfactuals × LLMs (further reading).** Different formalisms from this repo’s supervised dual-head decoder, but adjacent if you care about “alternative text under a treatment” with language models:
+
+- *[Counterfactual Token Generation in Large Language Models](https://arxiv.org/abs/2409.17027)* (Chatzi et al.) — Gumbel–Max structural causal model of autoregressive sampling; counterfactual rollouts without fine-tuning pretrained LMs.
+- *[Gumbel Counterfactual Generation From Language Models](https://arxiv.org/abs/2411.07180)* (Ravfogel et al.) — interventions vs true string counterfactuals; hindsight Gumbel sampling over latent noise.
+- *[Counterfactual Causal Inference in Natural Language with Large Language Models](https://arxiv.org/abs/2410.06392)* (Gendron et al.) — extracting causal variables from documents, merging graphs, and counterfactual inference with LLMs.
+- *[LIBERTy: A Causal Framework for Benchmarking Concept-Based Explanations of LLMs with Structural Counterfactuals](https://arxiv.org/abs/2601.10700)* (Toker et al.) — SCM-grounded structural counterfactual pairs for evaluating concept-based explanations.
 
 ---
 
