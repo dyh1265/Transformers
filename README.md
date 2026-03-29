@@ -1,43 +1,63 @@
-<div align="center">
+
 
 # Nano-LLM
 
 **Small decoder-only transformers, trained from scratch on PyTorch.**
 
-[![CI](https://img.shields.io/badge/CI-GitHub_Actions-2088FF?logo=github-actions&logoColor=white)](.github/workflows/ci.yml)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[CI](.github/workflows/ci.yml)
+[Python 3.10+](https://www.python.org/downloads/)
+[License: MIT](LICENSE)
 
-</div>
+
 
 ---
 
 ## Contents
 
-| Section | What’s there |
-|--------|----------------|
-| [Features](#features) | Tokenizer, data, Docker, tooling |
-| [Architecture](#architecture) | Data → train → checkpoint; optional TARNet head diagram |
-| [Quick start](#quick-start) | Docker, local install, W&B, generation |
-| [How training works](#how-training-works) | Pipeline overview |
-| [Training IMDB](#training-imdb) | `make train-imdb`, chat, resume |
-| [Tests](#tests) | pytest, coverage, CI |
-| [Development](#development) | `pip install -e ".[dev]"`, pre-commit |
-| [Project structure](#project-structure) | Layout of the repo |
-| [Config](#config) | Env vars and JSON config |
-| [License](#license) | MIT |
-| [Experiment archive](#experiment-archive) | Collapsed logs and notes |
+
+| Section                                   | What’s there                                            |
+| ----------------------------------------- | ------------------------------------------------------- |
+| [Features](#features)                     | Tokenizer, data, Docker, tooling                        |
+| [Contributions](#contributions)           | Inter-block residual blocks, TARNet-style training      |
+| [Architecture](#architecture)             | Data → train → checkpoint; optional TARNet head diagram |
+| [Quick start](#quick-start)               | Docker, local install, W&B, generation                  |
+| [How training works](#how-training-works) | Pipeline overview                                       |
+| [Training IMDB](#training-imdb)           | `make train-imdb`, chat, resume                         |
+| [Tests](#tests)                           | pytest, coverage, CI                                    |
+| [Development](#development)               | `pip install -e ".[dev]"`, pre-commit                   |
+| [Project structure](#project-structure)   | Layout of the repo                                      |
+| [Config](#config)                         | Env vars and JSON config                                |
+| [License](#license)                       | MIT                                                     |
+| [Experiment archive](#experiment-archive) | Collapsed logs and notes                                |
+
 
 ---
 
 ## Features
 
-| | |
-|:---|:---|
-| **Tokenizer** | Hugging Face **byte-level BPE** (`hf_bpe_byte`); sinusoidal or **RoPE** positional encoding |
-| **Model** | Causal multi-head self-attention; optional **inter-block** residuals; optional **TARNet** two-head mode |
-| **Data** | **IMDB** sentiment via Hugging Face `datasets` (tags or natural conditioning) |
-| **Runtime** | **Docker** (NGC PyTorch), **Make** targets, optional **Weights & Biases** |
+
+|               |                                                                                                         |
+| ------------- | ------------------------------------------------------------------------------------------------------- |
+| **Tokenizer** | Hugging Face **byte-level BPE** (`hf_bpe_byte`); sinusoidal or **RoPE** positional encoding             |
+| **Model**     | Causal multi-head self-attention; optional **inter-block** residuals; optional **TARNet** two-head mode |
+| **Data**      | **IMDB** sentiment via Hugging Face `datasets` (tags or natural conditioning)                           |
+| **Runtime**   | **Docker** (NGC PyTorch), **Make** targets, optional **Weights & Biases**                               |
+
+
+---
+
+## Contributions
+
+This repo is a small **from-scratch** decoder LM; beyond the baseline stack, it highlights two implementation threads you can turn on via config / CLI:
+
+
+|                                 |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Inter-block residual blocks** | With `--block-attn-residuals`, layers use `[InterBlockAttnDecoderBlock](src/nano_llm/layers/block_attn_residual.py)` instead of the vanilla `[DecoderBlock](src/nano_llm/layers/decoder_block.py)`. Each step mixes the current stream with **prior macro-block outputs** through a **depth attention** residual (RMSNorm “keys,” one learned pseudo-query, softmax over depth) **before** the usual causal self-attention and FFN—parallel residual adds into the same hidden stream, with snapshots taken at macro-block boundaries. |
+| **TARNet-like training**        | `--tarnet-two-heads`: one trunk, `logits_shared + Δ_k` readouts, factual **treatment** `T`, **weighted CE** on the active head, optional **JS** separation (`tarnet_head_separation_weight`). Diagram, equation, shared-head rationale, and inference (`--counterfactual`): [TARNet under Architecture](#architecture).                                                                                                                                                                                                                |
+
+
+**Papers.** Macro-block depth mixing is in the same family as **Block AttnRes** in *[Attention Residuals](https://arxiv.org/abs/2603.15031)* (Kimi Team, 2026). Conceptual background and how it maps to this repo: [vanilla vs inter-block decoder](docs/vanilla_vs_inter_block_decoder.md). Dual-head training here is **inspired by** TARNet’s shared encoder and treatment-specific heads in *[Estimating individual treatment effect: generalization bounds and algorithms](https://arxiv.org/abs/1606.03976)* (Shalit, Johansson & Sontag)—adapted to next-token LM loss, not the paper’s causal ITE objective.
 
 ---
 
@@ -66,9 +86,11 @@ flowchart LR
   TR --> CKPT
 ```
 
+
+
 ### TARNet two-head mode (`--tarnet-two-heads`)
 
-When enabled, the **same decoder trunk** feeds three readout MLPs in `NanoLLM` (see [`model.py`](src/nano_llm/model.py)): a **shared** vocabulary projection plus two **sentiment residual** heads (`Δ₀`, `Δ₁`). The final logits are `logits_k = logits_shared + Δ_k(hidden)` with the delta heads’ **last layer zero-initialized** so training starts near the shared prediction. **Treatment** `T ∈ {0,1}` comes from the review’s factual label (negative → 0, positive → 1); the training loss is a **weighted mix** of next-token CE on `logits0` vs `logits1`, plus an optional **Jensen–Shannon** term between the two heads (`tarnet_head_separation_weight`).
+`[NanoLLM](src/nano_llm/model.py)` keeps one causal trunk; on top of the final hidden state it stacks a **shared** vocab MLP (`logits_shared`) and two **sentiment** MLPs with `**logits_k = logits_shared + Δ_k(hidden)`**. The **last layer of each Δ** is **zero-init**, so both heads match the shared predictor at initialization. **Treatment** `T ∈ {0,1}` is the review’s factual sentiment (negative → 0, positive → 1); the trainer minimizes **weighted** next-token CE on `logits_T` plus optional **Jensen–Shannon** between the two heads (`tarnet_head_separation_weight`). Original TARNet (ITE, observational causal setup): see **[Contributions** § Papers](#contributions).
 
 ```mermaid
 flowchart TB
@@ -90,6 +112,10 @@ flowchart TB
   D1 --> P1
   P1 --> L1["logits1 — head Y1"]
 ```
+
+
+
+**Why `logits_shared` (vs two full heads)?** One projection carries **treatment-agnostic** structure (syntax, entities, review phrasing); **Δ₀**/**Δ₁** only **nudge** logits per sentiment—**less capacity** than duplicating two full readouts and a clearer Y0 vs Y1 **delta** on the same baseline (with the cold start behavior described above).
 
 At inference, `scripts/chat.py --counterfactual` can sample from **Y0** or **Y1** (counterfactual-style continuations); `generate_both_heads` runs both branches from one trunk forward when contexts match.
 
@@ -198,24 +224,18 @@ docker compose run generate --prompt "<bos>[SENTIMENT] positive [/SENTIMENT] [RE
 ## How training works
 
 1. **CLI and config** — `scripts/train.py` loads `DEFAULT_CONFIG` (and optional `--config` JSON), applies CLI overrides, then calls `nano_llm.train.train(cfg)`.
-
 2. **Data** — Training loads **IMDB** from Hugging Face and formats each row into a conditioned string. The tokenizer is **trained on train+val text** unless you **resume** from a checkpoint with `tokenizer_state` / `vocab`, in which case it is restored to match the checkpoint. If present, JSON `dataset_id` must be `"imdb_sentiment"` (other values are rejected).
-
 3. **Batches** — Chunking keeps the conditioning prefix (tags, natural instructions, or TARNet command + `[REVIEW]`) aligned with the review body; padded targets use ignore index `-100`.
-
-4. **Model** — Causal decoder-only `NanoLLM`. With `--tarnet-two-heads`: shared vocab head plus two sentiment heads; `weight_tie` is off in that mode.
-
+4. **Model** — Causal decoder-only `NanoLLM`. With `--tarnet-two-heads`, `weight_tie` is off (see [Architecture → TARNet](#architecture)).
 5. **Loss and optimization**
-   - **Single head:** next-token cross-entropy (optional **weight-tied** embeddings).
-   - **TARNet:** treatment-weighted CE across heads plus optional `tarnet_head_separation_weight` (Jensen–Shannon between head logits).
-   - **Optimizer:** AdamW; **LR schedule:** cosine, linear, or none. **AMP:** `fp16` / `bf16` on CUDA when configured.
-
+  - **Single head:** next-token cross-entropy (optional **weight-tied** embeddings).
+  - **TARNet:** weighted CE on the head that matches factual `T`, optional JS via `tarnet_head_separation_weight` (full wiring in [Architecture → TARNet](#architecture)).
+  - **Optimizer:** AdamW; **LR schedule:** cosine, linear, or none. **AMP:** `fp16` / `bf16` on CUDA when configured.
 6. **Checkpointing** — When validation improves, `best.pt` stores `model` weights, full `config`, `vocab`, and `tokenizer_state` for reproducible load and chat.
-
 7. **IMDB conditioning**
-   - **`tags` (default):** `[SENTIMENT] positive|negative [/SENTIMENT] [REVIEW] … [/REVIEW]`.
-   - **`natural`:** instruction text before `[REVIEW]` (`--imdb-conditioning-style natural`, optional `--imdb-positive-instruction` / `--imdb-negative-instruction`).
-   - **`scripts/chat.py`** reads `imdb_conditioning_style` from the checkpoint for single-head models.
+  - `**tags` (default):** `[SENTIMENT] positive|negative [/SENTIMENT] [REVIEW] … [/REVIEW]`.
+  - `**natural`:** instruction text before `[REVIEW]` (`--imdb-conditioning-style natural`, optional `--imdb-positive-instruction` / `--imdb-negative-instruction`).
+  - `**scripts/chat.py`** reads `imdb_conditioning_style` from the checkpoint for single-head models.
 
 ---
 
@@ -314,28 +334,32 @@ Ruff in pre-commit is limited to `src/` and `tests/` (same scope as `make lint` 
 
 ## Project structure
 
-| Path | Role |
-|------|------|
-| `.github/workflows/ci.yml` | Ruff + pytest on push/PR to `main` / `master` |
-| `.pre-commit-config.yaml` | Optional Ruff + file hygiene hooks |
-| `.env.example` | Template for secrets / env (copy to `.env`; never commit `.env`) |
-| `LICENSE` | MIT |
-| `docs/README.md` | Index of Jupyter tutorials (tokenizer, IMDB, sampling, decoder stacks) |
-| `src/nano_llm/` | Model, layers, tokenizer, data, training, inference |
-| `scripts/train.py` | Training CLI |
-| `scripts/generate.py` | Generation CLI |
+
+| Path                       | Role                                                                   |
+| -------------------------- | ---------------------------------------------------------------------- |
+| `.github/workflows/ci.yml` | Ruff + pytest on push/PR to `main` / `master`                          |
+| `.pre-commit-config.yaml`  | Optional Ruff + file hygiene hooks                                     |
+| `.env.example`             | Template for secrets / env (copy to `.env`; never commit `.env`)       |
+| `LICENSE`                  | MIT                                                                    |
+| `docs/README.md`           | Index of Jupyter tutorials (tokenizer, IMDB, sampling, decoder stacks) |
+| `src/nano_llm/`            | Model, layers, tokenizer, data, training, inference                    |
+| `scripts/train.py`         | Training CLI                                                           |
+| `scripts/generate.py`      | Generation CLI                                                         |
+
 
 ---
 
 ## Config
 
-| Source | Purpose |
-|--------|---------|
-| `scripts/train.py --config` | JSON file merged with defaults; highest priority after CLI flags |
-| Env `NANO_LLM_CONFIG` | Optional path to default JSON (used by `load_config` helpers) |
-| Env `WANDB_API_KEY` | Optional; Weights & Biases when `--use-wandb` |
 
-Copy [`.env.example`](.env.example) to `.env` for local or Compose secrets (never commit `.env`). CLI flags override values from config files.
+| Source                      | Purpose                                                          |
+| --------------------------- | ---------------------------------------------------------------- |
+| `scripts/train.py --config` | JSON file merged with defaults; highest priority after CLI flags |
+| Env `NANO_LLM_CONFIG`       | Optional path to default JSON (used by `load_config` helpers)    |
+| Env `WANDB_API_KEY`         | Optional; Weights & Biases when `--use-wandb`                    |
+
+
+Copy `[.env.example](.env.example)` to `.env` for local or Compose secrets (never commit `.env`). CLI flags override values from config files.
 
 ---
 
@@ -361,9 +385,7 @@ Unedited notes: Docker one-liners, training logs, and chat transcripts from past
 - **Qualitative:** Counterfactual **Y0** vs **Y1** often skew negative vs positive; fluency is mixed at this scale.
 - **512-wide comparison table:** vanilla vs inter-block vs TARNet — see expanded section below.
 
-<details>
-<summary><strong>Expand — raw logs, commands, and full table</strong></summary>
-
+**Expand — raw logs, commands, and full table**
 
 ### IMDB ≈18–20M runs: training, validation, and sample quality (summary)
 
@@ -388,12 +410,15 @@ The logs below compare three **512-wide** IMDB runs (same `num_layers=6`, `d_ff=
 ---
 
 ### Test Results TARNet-style ≈20M-parameter run
+
 ```bash
 docker compose run --rm train python scripts/train.py --epochs 40 --batch-size 16 --d-model 512 --num-heads 8 --num-layers 6 --d-ff 1888 --seq-len 256 --dropout 0.1 --tokenizer-type hf_bpe_byte --bpe-vocab-size 256 --tarnet-two-heads --tarnet-head-n-fc 2 --position-encoding rope --block-attn-residuals --macro-block-size 2 --max-block-representations 9 --checkpoint-dir checkpoints/counterfactual_repeat_20m --tarnet-head-separation-weight 0.02
 ```
+
 ```bash
 docker compose run --rm -it chat --checkpoint checkpoints/counterfactual_repeat_20m/best.pt --max-tokens 340 --temperature 0.7 --method top_p --top-p 0.5 --counterfactual --repetition-penalty 1.5
 ```
+
 Generate [+/-/b/q] (default b):
 
 [Y0]
@@ -418,4 +443,21 @@ For a film that has no character development, and it is pretty bad. The story is
 [Y1]
 raphics, so there is not a lot of contention in this movie. The story tells a good man who has been put together by describing the way he is in it and finally gets kidnapped but only to find out that his woman is now being tumbled. That's what I've seen for years! And he's excellent as the damaged counterfeiter; and Similarly she poses as an elderly man with a real job, you've seen it. The film moves with something more than just playing on.
 
-</details>
+[Y0]
+
+ts, and then all of a sudden he decides to go back to live with his wife. There's nothing more than that, in fact it is just plain stupid and trite. And the ending was cheesy and overly similar for this movie. That's why I don't see how anybody mentioned that this film is goofball-made in its pornographical way. Sometimes you can't believe the reasons for examining what literally made this movie sometimes becomes out of nowhere; once you see SOYLENT NIGHT!
+
+[Y1]
+
+Perhaps the most interesting thing about this movie is that it has no sense of disbelief. The story is good, but not as funny as you can see, and it's excellent! That's what I liked.
+
+
+
+[Y0]
+
+OK, there are some funny moments in this movie. The characters were poorly drawn and extras were not too bad. And the story was terrible, I thought it was good for a low budget film. This is only because of it's just that it has non-plot tension and plot lines that severely cut together without an overall damning flatulence of any sort which is really abounding! Scarface was stilted, as in the old hospital cosmic mansion on his head with similar powers; he did NOT give kid all of what he examined that?? Affore comes to be mental into light-hearking but this film's finest storm is relevance, and yet you'll be modish and I've seen only for good old pick-basic election, when I th
+
+[Y1]
+
+One of the most incredible films ever made. This is a movie that worked beautifully, and it was considering the programmes on this site, but I found it to be a lot more open-minded than you have seen for example. The story is dark and nicely detailed with good suspension of disbelief and quality.
+
