@@ -17,7 +17,7 @@
 | Section | What’s there |
 |--------|----------------|
 | [Features](#features) | Tokenizer, data, Docker, tooling |
-| [Architecture](#architecture) | Data → train → checkpoint (diagram) |
+| [Architecture](#architecture) | Data → train → checkpoint; optional TARNet head diagram |
 | [Quick start](#quick-start) | Docker, local install, W&B, generation |
 | [How training works](#how-training-works) | Pipeline overview |
 | [Training IMDB](#training-imdb) | `make train-imdb`, chat, resume |
@@ -65,6 +65,33 @@ flowchart LR
   TR --> M
   TR --> CKPT
 ```
+
+### TARNet two-head mode (`--tarnet-two-heads`)
+
+When enabled, the **same decoder trunk** feeds three readout MLPs in `NanoLLM` (see [`model.py`](src/nano_llm/model.py)): a **shared** vocabulary projection plus two **sentiment residual** heads (`Δ₀`, `Δ₁`). The final logits are `logits_k = logits_shared + Δ_k(hidden)` with the delta heads’ **last layer zero-initialized** so training starts near the shared prediction. **Treatment** `T ∈ {0,1}` comes from the review’s factual label (negative → 0, positive → 1); the training loss is a **weighted mix** of next-token CE on `logits0` vs `logits1`, plus an optional **Jensen–Shannon** term between the two heads (`tarnet_head_separation_weight`).
+
+```mermaid
+flowchart TB
+  subgraph trunk["Shared trunk (causal decoder)"]
+    IDS["Token IDs"]
+    IDS --> EMB["Embedding + positional encoding"]
+    EMB --> DEC["Decoder blocks (vanilla or inter-block)"]
+    DEC --> LNF["Final LayerNorm"]
+  end
+  LNF --> H["Hidden state H (per position)"]
+  H --> SH["tarnet_shared_head"]
+  SH --> LS["logits_shared"]
+  H --> D0["tarnet_sentiment_delta0"]
+  H --> D1["tarnet_sentiment_delta1"]
+  LS --> P0["+"]
+  D0 --> P0
+  P0 --> L0["logits0 — head Y0"]
+  LS --> P1["+"]
+  D1 --> P1
+  P1 --> L1["logits1 — head Y1"]
+```
+
+At inference, `scripts/chat.py --counterfactual` can sample from **Y0** or **Y1** (counterfactual-style continuations); `generate_both_heads` runs both branches from one trunk forward when contexts match.
 
 ---
 
