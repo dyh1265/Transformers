@@ -196,8 +196,6 @@ python scripts/train.py
 # Override hyperparameters
 python scripts/train.py --d-model 128 --epochs 5 --batch-size 32
 
-
-
 # Continue training from checkpoint (more epochs)
 python scripts/train.py --resume checkpoints/best.pt --epochs 15
 
