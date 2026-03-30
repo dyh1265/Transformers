@@ -93,17 +93,24 @@ flowchart LR
 
 ### TARNet two-head mode (`--tarnet-two-heads`)
 
-[`NanoLLM`](src/nano_llm/model.py) keeps one causal trunk; on top of the final hidden state it stacks a **shared** vocab MLP (`logits_shared`) and two **sentiment** MLPs with `logits_k = logits_shared + Δ_k(hidden)`. The **last layer of each Δ** is **zero-init**, so both heads match the shared predictor at initialization. **Treatment** `T ∈ {0,1}` is the review’s factual sentiment (negative → 0, positive → 1); the trainer minimizes **weighted** next-token CE on `logits_T` plus optional **Jensen–Shannon** between the two heads (`tarnet_head_separation_weight`). Original TARNet (ITE, observational causal setup): see **Papers** under [Contributions](#contributions).
+[`NanoLLM`](src/nano_llm/model.py) uses one causal trunk. On top of the final hidden state it applies a **shared** vocab MLP (`logits_shared`) and two **sentiment** residual heads:
 
-**Input text (what the model sees).** Training and counterfactual chat use the **same treatment-invariant** template: a command line, then `[REVIEW] … [/REVIEW]` around the body (no `[SENTIMENT]` or natural “write a positive/negative review” line in the actual token sequence). Concretely, each example is shaped like:
+`logits_k = logits_shared + Δ_k(hidden)`
+
+The **last layer of each Δ** is **zero-initialized**, so at step 0 both heads match the shared predictor. The trainer computes a **treatment-weighted** next-token CE loss on `logits_T` (where `T ∈ {0,1}` is factual sentiment: negative → 0, positive → 1), plus an optional **Jensen–Shannon** term between the two heads (`tarnet_head_separation_weight`). Original TARNet framing (ITE, observational causal setup): see **Papers** under [Contributions](#contributions).
+
+**Input text (what the model sees).** Training examples and TARNet counterfactual chat share a **treatment-invariant** template: a command prompt, then `[REVIEW] … [/REVIEW]` around the body (the tokenized sequence does not include `[SENTIMENT] … [/SENTIMENT]`). Each example is constructed like:
 
 `<bos>{command_prompt} [REVIEW] <review characters…> [/REVIEW]<eos>`
 
-The default `{command_prompt}` is `GENERATE an IMDB-like review:` (config key `imdb_tarnet_command_prompt`, CLI `--imdb-tarnet-command-prompt`). Constants `[REVIEW]` / `[/REVIEW]` match [`data.py`](src/nano_llm/data.py).
+The default `{command_prompt}` is `GENERATE an IMDB-like review:` (config key `imdb_tarnet_command_prompt`, CLI `--imdb-tarnet-command-prompt`). `[REVIEW]` / `[/REVIEW]` come from [`data.py`](src/nano_llm/data.py).
 
-**Where `T` comes from.** Rows are still loaded from the usual IMDB formatting (`imdb_conditioning_style`: tags with `[SENTIMENT] positive|negative [/SENTIMENT]`, or **natural** instructions before `[REVIEW]`) so the dataloader can read the **factual** label. [`IMDBTARNetDataset`](src/nano_llm/data.py) then **drops** that sentiment from the string, maps it to `T`, and only feeds the command + `[REVIEW]` template above. **Loss:** next-token cross-entropy uses **`logits0` or `logits1` according to `T`** on every non-padding target in the chunk (the command, markup, and review body in that window). The dataset also exposes a **`review_mask`** for review-body positions, but the current [`train`](src/nano_llm/train.py) loop does not use it to restrict TARNet CE. So the model never sees an explicit “positive/negative” token in the prompt—only the shared command text—while **`T`** picks which head is trained on that example.
+**Where `T` comes from (and how it affects loss).** IMDB rows are still loaded using the usual formatting (`imdb_conditioning_style`: tags with `[SENTIMENT] positive|negative [/SENTIMENT]`, or **natural** instructions before `[REVIEW]`) so the loader can read the **factual** label. [`IMDBTARNetDataset`](src/nano_llm/data.py) then **drops** the sentiment markup from the tokenized string, converts it to `T`, and trains the model with:
 
-At **inference**, use the **same** prefix your checkpoint was trained with (e.g. `scripts/chat.py --counterfactual` builds `<bos>{command_prompt} [REVIEW] ` and continues generation; override text with `--command-prompt`).
+- **Loss:** next-token CE chooses **`logits0` vs `logits1` according to `T`** for all **non-padding** target tokens in the chunk window.
+- The dataset exposes a `review_mask`, but the current [`train`](src/nano_llm/train.py) loop does not use it to restrict the TARNet CE; so `T` is not provided as an explicit token hint—only via head selection in the loss.
+
+At **inference**, use the same prefix your checkpoint was trained with (e.g. `scripts/chat.py --counterfactual` builds `<bos>{command_prompt} [REVIEW] `); you can override the prefix text with `--command-prompt`.
 
 ```mermaid
 flowchart TB
@@ -189,14 +196,7 @@ python scripts/train.py
 # Override hyperparameters
 python scripts/train.py --d-model 128 --epochs 5 --batch-size 32
 
-# Optional BPE tokenizer
-python scripts/train.py --tokenizer-type bpe --bpe-vocab-size 256
 
-# Optional byte-level BPE tokenizer
-python scripts/train.py --tokenizer-type bpe_byte --bpe-vocab-size 256
-
-# Optional Hugging Face byte-level BPE tokenizer
-python scripts/train.py --tokenizer-type hf_bpe_byte --bpe-vocab-size 256
 
 # Continue training from checkpoint (more epochs)
 python scripts/train.py --resume checkpoints/best.pt --epochs 15
@@ -221,8 +221,6 @@ python scripts/generate.py --method top_p --top-p 0.9 --seed 42
 # Specific checkpoint
 python scripts/generate.py --checkpoint checkpoints/best.pt
 ```
-
-By default, decoded output passes through a small **word redactor** (sexual/pornographic terms → `[redacted]`; list in [`content_filter.py`](src/nano_llm/inference/content_filter.py)). Use **`--no-censor`** on `scripts/generate.py` or `scripts/chat.py` for raw text.
 
 With Docker (after training in container, checkpoints in `./checkpoints`):
 
@@ -281,34 +279,6 @@ docker compose run --rm train python scripts/train.py \
   --tokenizer-type hf_bpe_byte --bpe-vocab-size 256 --position-encoding rope \
   --imdb-max-review-chars 500 --epochs 30 \
   --checkpoint-dir checkpoints/imdb_sentiment/hf_bpe_byte --early-stopping-patience 5
-```
-
-### IMDB Counterfactual Embedding Objective (legacy / disabled in current trainer)
-
-The current `nano_llm.train.train` loop does **not** apply the embedding-mixture loss below; it only uses next-token CE (and TARNet terms if `--tarnet-two-heads`). The following described an older objective; CLI flags may still appear in configs for reference.
-
-For sentiment-conditioned factual/counterfactual branch training (historical), enable:
-
-- `--enable-counterfactual-objective`
-- `--counterfactual-ce-weight` (default `1.0`)
-- `--counterfactual-embedding-weight` (default `0.25`)
-
-Loss:
-
-`L_total = ce_weight * L_ce + emb_weight * ((1 - T) * L_neg + T * L_pos)`
-
-- `T`: treatment from factual sentiment (`negative=0`, `positive=1`)
-- `L_pos`, `L_neg`: cosine embedding losses between factual review embedding and the positive/negative branch embeddings
-
-Example:
-
-```bash
-python scripts/train.py \
-  --tokenizer-type hf_bpe_byte --bpe-vocab-size 256 \
-  --enable-counterfactual-objective \
-  --counterfactual-ce-weight 1.0 \
-  --counterfactual-embedding-weight 0.25 \
-  --epochs 10
 ```
 
 ---
@@ -391,7 +361,7 @@ Archived notes: Docker one-liners, training logs, and chat transcripts. Transcri
 **Summary**
 
 - **Large TARNet (≈20M params):** `d_model=512`, `num_heads=8`, `num_layers=6`, `d_ff=1888`, `seq_len=256`, RoPE, inter-block residuals, `hf_bpe_byte` vocab 256, `--tarnet-head-separation-weight 0.02`, 40 epochs, `counterfactual_repeat_20m`. **≈20,040,768** parameters; **≈4.8 h** wall time; val loss **≈1.96 → best ≈1.65**; perplexity **≈7 → ≈5.2** (val best ≈5.21).
-- **Qualitative:** Counterfactual **Y0** vs **Y1** often skew negative vs positive; fluency is mixed at this scale.
+- **Qualitative:** Counterfactual **Y0** vs **Y1** show different sentiment styles; fluency varies across prompts at this scale.
 - **512-wide comparison table:** vanilla vs inter-block vs TARNet — see expanded section below.
 
 <details>
@@ -399,23 +369,23 @@ Archived notes: Docker one-liners, training logs, and chat transcripts. Transcri
 
 ### IMDB ≈18–20M runs: training, validation, and sample quality (summary)
 
-The logs below compare three **512-wide** IMDB runs (same `num_layers=6`, `d_ff=1888`, `seq_len=256`, RoPE, `hf_bpe_byte` vocab 256, batch 16). Rows are ordered **worst → best** by **best validation CE** (lower is better).
+The logs below compare three **512-wide** IMDB runs (same `num_layers=6`, `d_ff=1888`, `seq_len=256`, RoPE, `hf_bpe_byte` vocab 256, batch 16). Rows are ordered **lowest → best** by **best validation CE** (lower is better).
 
 
 | Order     | Checkpoint                  | Decoder stack                        | LM head                                                | Epochs | Params     | Best val CE | Final val CE | Best val PPL | Wall time |
 | --------- | --------------------------- | ------------------------------------ | ------------------------------------------------------ | ------ | ---------- | ----------- | ------------ | ------------ | --------- |
-| 1 (worst) | `imdb_baseline_vanilla_20m` | Vanilla (`block_attn_residuals` off) | Single, `imdb_conditioning_style=natural`              | 20     | 18,062,400 | 1.727       | 1.727        | 5.62         | ≈1.2 h    |
+| 1 (lowest) | `imdb_baseline_vanilla_20m` | Vanilla (`block_attn_residuals` off) | Single, `imdb_conditioning_style=natural`              | 20     | 18,062,400 | 1.727       | 1.727        | 5.62         | ≈1.2 h    |
 | 2         | `imdb_baseline_natural_20m` | Inter-block                          | Single, natural                                        | 20     | 18,074,688 | 1.717       | 1.717        | 5.57         | ≈2.2 h    |
 | 3 (best)  | `counterfactual_repeat_20m` | Inter-block                          | TARNet two heads, `tarnet_head_separation_weight=0.02` | 40     | 20,040,768 | 1.650       | 1.664        | 5.21         | ≈4.8 h    |
 
 
 **What was added each step, and what improved**
 
-1. **Baseline (worst): vanilla decoder + natural instructions, single head.** Lowest training cost here, but **best val CE ≈1.73**. Interactive **chat** samples (top_p 0.5, temp 0.7, repetition penalty 1.5) show **heavy garbling**: repeated junk tokens, odd symbols, and broken structure—usable as a negative example for this scale.
-2. **Same recipe but inter-block decoder (`--block-attn-residuals`).** ≈12k extra parameters, about **2×** wall time for 20 epochs. **Best val CE improves by ≈0.01** (1.727 → 1.717). Samples under positive vs negative `[SENTIMENT]` prompts are still flawed but read more like **English sentences** (opinion + plot-like phrases) with fewer random symbol runs.
-3. **TARNet + longer training + head separation.** Adds **two sentiment heads**, **JS separation loss** (`0.02`), and **40 epochs** (about **2M** more parameters than the single-head models). **Best val CE ≈1.65** (about **0.07** better than the natural inter-block single-head run). **Evaluation:** `chat --counterfactual` prints **Y0** vs **Y1** from the same prompt; transcripts show **tone skew** (more negative/critical vs more positive openings) mixed with contradictions and truncation—interesting for counterfactual play, not production quality.
+1. **Baseline:** vanilla decoder + natural instructions, single head. **Best val CE ≈1.73**.
+2. **Inter-block residuals (`--block-attn-residuals`).** Adds ≈12k parameters (about **2×** wall time for 20 epochs) and improves **best val CE to ≈1.717**.
+3. **TARNet + longer training + head separation.** Adds two sentiment heads, JS separation loss (`0.02`), and longer training (40 epochs), reaching **best val CE ≈1.65**.
 
-**Caveats:** TARNet and single-head losses are not identical objectives; more epochs and parameters are **confounded** with architecture changes.
+**Note:** objectives differ across configurations (single-head vs TARNet dual-head), so comparisons reflect both architecture and loss changes.
 
 ---
 
@@ -427,7 +397,7 @@ docker compose run --rm train python scripts/train.py --epochs 40 --batch-size 1
 
 ```bash
 docker compose run --rm -it chat --checkpoint checkpoints/counterfactual_repeat_20m/best.pt --max-tokens 340 --temperature 0.7 --method top_p --top-p 0.5 --counterfactual --repetition-penalty 1.5
-```
+
 
 Generate [+/-/b/q] (default b):
 [Y0]
@@ -444,6 +414,8 @@ For a film that has no character development, and it is pretty bad. The story is
 [Y1]
 raphics, so there is not a lot of contention in this movie. The story tells a good man who has been put together by describing the way he is in it and finally gets kidnapped but only to find out that his woman is now being tumbled. That's what I've seen for years! And he's excellent as the damaged counterfeiter; and Similarly she poses as an elderly man with a real job, you've seen it. The film moves with something more than just playing on.
 
+Generate [+/-/b/q] (default b):
+
 [Y0]
 
 ts, and then all of a sudden he decides to go back to live with his wife. There's nothing more than that, in fact it is just plain stupid and trite. And the ending was cheesy and overly similar for this movie. That's why I don't see how anybody mentioned that this film is goofball-made in its [redacted] way. Sometimes you can't believe the reasons for examining what literally made this movie sometimes becomes out of nowhere; once you see SOYLENT NIGHT!
@@ -451,6 +423,8 @@ ts, and then all of a sudden he decides to go back to live with his wife. There'
 [Y1]
 
 Perhaps the most interesting thing about this movie is that it has no sense of disbelief. The story is good, but not as funny as you can see, and it's excellent! That's what I liked.
+
+Generate [+/-/b/q] (default b):
 
 [Y0]
 
@@ -460,16 +434,20 @@ OK, there are some funny moments in this movie. The characters were poorly drawn
 
 One of the most incredible films ever made. This is a movie that worked beautifully, and it was considering the programmes on this site, but I found it to be a lot more open-minded than you have seen for example. The story is dark and nicely detailed with good suspension of disbelief and quality.
 
+Generate [+/-/b/q] (default b):
+
 [Y0]
 What a waste of time. To be honest, this is only the worst movie ever made! The premises in this movie seem to sound like it was dubbed or not. Sometimes you'll get by the casting of Cagney and Adams, which may be more than that.
 
 [Y1]
 Have you ever seen this movie? This is a superb film. The casting of the two leads, especially Sammo Hung as the woman whose father was born in Afghanistan and he did not get himself into being a parrot. I think that it's madly because it's strength and sentimentality is more out of place, as with most old movies they'll live without exceptional conversation.
 
+Generate [+/-/b/q] (default b):
+
 [Y0]
 When I saw this movie, it was full of flaws. The acting is bad and the performances are wooden and the story line does not match up to me. And while that's becoming more than half of the film is obviously terrible, you've gotten a little bit into it as well as once in only times you see how shallow he is!
 
 [Y1]
 One of the best movies ever made. The story is about tragically changing his ways and doing something like this, as he prefers to become a genuinely fascinated (and industry) dreamer. And it's not so bad, it's good for those who hated that movie with young men whose family live on out and when the concept was before you seen the film in 1973! Timothy Spall was excellent as Spanjers, he played Amitabh Bachchan is good to watch; now I've seldom seen him more than this once? This movie is actual movie for you!
-
+```
 </details>
