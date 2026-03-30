@@ -232,6 +232,8 @@ docker compose run generate
 docker compose run generate --prompt "<bos>[SENTIMENT] positive [/SENTIMENT] [REVIEW] " --max-tokens 200 --method top_p
 ```
 
+**Safety note.** This project does not include safety guardrails at model level. Generated outputs may still be inappropriate; as a minimal safeguard, decoded text is post-processed to redact a small set of explicit terms by default (see [`content_filter.py`](src/nano_llm/inference/content_filter.py)). Use `--no-censor` on `scripts/generate.py` or `scripts/chat.py` to print raw decoded output.
+
 ## How training works
 
 1. **CLI and config** — `scripts/train.py` loads `DEFAULT_CONFIG` (and optional `--config` JSON), applies CLI overrides, then calls `nano_llm.train.train(cfg)`.

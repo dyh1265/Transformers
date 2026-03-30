@@ -115,6 +115,11 @@ def main() -> int:
         action="store_true",
         help="Do not sanitize output (keep replacement chars, etc.)",
     )
+    parser.add_argument(
+        "--no-censor",
+        action="store_true",
+        help="Do not redact explicit terms in decoded output (default: on)",
+    )
     args = parser.parse_args()
 
     if not args.checkpoint.exists():
@@ -152,6 +157,7 @@ def main() -> int:
             stop_at_newline=not args.no_stop_newline,
             stop_sequence=args.stop_sequence,
             sanitize=not args.no_sanitize,
+            censor_adult=not args.no_censor,
         )
         print("[Y0]\n" + out0 + "\n\n[Y1]\n" + out1)
     else:
@@ -172,6 +178,7 @@ def main() -> int:
             stop_at_newline=not args.no_stop_newline,
             stop_sequence=args.stop_sequence,
             sanitize=not args.no_sanitize,
+            censor_adult=not args.no_censor,
         )
         print(out)
     return 0

@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from nano_llm.inference.content_filter import redact_sensitive_output
+
 # Unicode replacement char (invalid UTF-8 decode) and common wrong-chars to fix
 REPLACEMENT_CHAR = "\ufffd"
 SANITIZE_REPLACEMENTS = {
@@ -92,6 +94,7 @@ def generate(
     seed: int | None = None,
     device: torch.device | str | None = None,
     sanitize: bool = True,
+    censor_adult: bool = True,
 ) -> str:
     """Generate text autoregressively.
 
@@ -164,6 +167,8 @@ def generate(
     out = tokenizer.decode(ids)
     if sanitize:
         out = sanitize_output(out)
+    if censor_adult:
+        out = redact_sensitive_output(out)
     return out
 
 
@@ -184,6 +189,7 @@ def generate_both_heads(
     seed: int | None = None,
     device: torch.device | str | None = None,
     sanitize: bool = True,
+    censor_adult: bool = True,
 ) -> tuple[str, str]:
     """Generate Y0 and Y1 from a TARNet two-head model.
 
@@ -300,4 +306,7 @@ def generate_both_heads(
     if sanitize:
         out0 = sanitize_output(out0)
         out1 = sanitize_output(out1)
+    if censor_adult:
+        out0 = redact_sensitive_output(out0)
+        out1 = redact_sensitive_output(out1)
     return out0, out1

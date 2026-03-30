@@ -82,6 +82,11 @@ def main() -> int:
         help='Prefix used for TARNet counterfactual mode (default: "GENERATE an IMDB-like review:")',
     )
     p.add_argument("--device", type=str, default=None)
+    p.add_argument(
+        "--no-censor",
+        action="store_true",
+        help="Do not redact explicit terms in decoded output (default: on)",
+    )
     args = p.parse_args()
 
     if not args.checkpoint.exists():
@@ -150,6 +155,7 @@ def main() -> int:
                     seed=None,
                     device=None,
                     sanitize=True,
+                    censor_adult=not args.no_censor,
                 )
                 review0 = _extract_review(out0)
                 review1 = _extract_review(out1)
@@ -173,6 +179,7 @@ def main() -> int:
                     seed=None,
                     device=None,
                     sanitize=True,
+                    censor_adult=not args.no_censor,
                 )
                 review = _extract_review(out)
                 label = "Y1" if head_id == 1 else "Y0"
@@ -216,6 +223,7 @@ def main() -> int:
             seed=None,
             device=None,
             sanitize=True,
+            censor_adult=not args.no_censor,
         )
         review = _extract_review(out)
         print(f"\n[{str(sentiment).upper()}]\n{review}\n", flush=True)
