@@ -7,6 +7,8 @@ endif
 SERVICE := train
 CHECKPOINT ?= checkpoints/best.pt
 IMDB_CHECKPOINT ?= checkpoints/imdb_sentiment/hf_bpe_byte/best.pt
+API_CHECKPOINT ?= checkpoints/counterfactual_repeat_20m/best.pt
+API_PORT ?= 18080
 EPOCHS ?= 30
 PROMPT ?= <bos>[SENTIMENT] positive [/SENTIMENT] [REVIEW]
 MAX_TOKENS ?= 300
@@ -34,6 +36,7 @@ help:
 	@echo "  make resume     - Resume training (EPOCHS=15, CHECKPOINT=checkpoints/best.pt)"
 	@echo "  make train-best - Train from best HPO config (saves to checkpoints/imdb_sentiment/<tokenizer>)"
 	@echo "  make generate   - Generate text (PROMPT, MAX_TOKENS, METHOD)"
+	@echo "  make inference-api - TARNet HTTP API on GPU (localhost:18080; API_CHECKPOINT, API_PORT, ARGS)"
 	@echo "  make hpo-rank   - Rank HPO trials by quality metrics (trial_*.json under hpo_results/)"
 	@echo "  make shell      - Interactive bash in container"
 	@echo "  make lint       - Run ruff check and format check"
@@ -103,6 +106,9 @@ generate: build
 
 chat-imdb: build
 	$(COMPOSE) run --rm -it chat --checkpoint "$(IMDB_CHECKPOINT)" $(ARGS)
+
+inference-api: build
+	$(COMPOSE) run --rm --service-ports inference-api python scripts/inference_api.py --checkpoint "$(API_CHECKPOINT)" --host 0.0.0.0 --port $(API_PORT) --device cuda $(ARGS)
 
 hpo-rank:
 	python scripts/rank_hpo.py

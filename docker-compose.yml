@@ -53,3 +53,36 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+
+  inference-api:
+    image: nano-llm-train
+    build: .
+    ipc: host
+    shm_size: "1gb"
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    command:
+      - python
+      - scripts/inference_api.py
+      - --checkpoint
+      - checkpoints/counterfactual_repeat_20m/best.pt
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "18080"
+      - --device
+      - cuda
+    ports:
+      - "18080:18080"
+    volumes:
+      - .:/workspace
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

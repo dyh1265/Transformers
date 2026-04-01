@@ -230,6 +230,46 @@ docker compose run generate
 docker compose run generate --prompt "<bos>[SENTIMENT] positive [/SENTIMENT] [REVIEW] " --max-tokens 200 --method top_p
 ```
 
+Localhost API server (TARNet-only):
+
+```bash
+# Start HTTP server on localhost:18080 (default port avoids common 8000 conflicts)
+python scripts/inference_api.py --checkpoint checkpoints/counterfactual_repeat_20m/best.pt --host 127.0.0.1
+
+# Same API in the GPU Docker image (NVIDIA Compose stack). Host listens on 127.0.0.1:18080; use --host 0.0.0.0 in-container.
+make inference-api
+# or: docker compose run --rm --service-ports inference-api
+
+# Health check
+curl http://127.0.0.1:18080/health
+
+# Generate both reviews from one request
+curl -X POST http://127.0.0.1:18080/generate ^
+  -H "Content-Type: application/json" ^
+  -d "{\"job_id\":\"api-1\",\"prompt\":\"<bos>GENERATE an IMDB-like review: [REVIEW] \",\"both_reviews\":true,\"max_tokens\":120,\"method\":\"top_p\",\"top_p\":0.9}"
+
+# OpenAI-compatible chat completions route
+curl -X POST http://127.0.0.1:18080/v1/chat/completions ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"nano-llm-local\",\"messages\":[{\"role\":\"user\",\"content\":\"<bos>GENERATE an IMDB-like review: [REVIEW] \"}],\"both_reviews\":true,\"max_tokens\":120,\"top_p\":0.9}"
+```
+
+`POST /generate` accepts the same fields as worker JSON requests (`job_id`, `prompt`, `both_reviews`, `max_tokens`, sampling args, etc.). Response includes either `output` or `output_y0` + `output_y1`.
+`POST /v1/chat/completions` accepts OpenAI-style `messages`; set `both_reviews=true` to return two assistant choices (Y0/Y1).
+
+The server prints **no HTTP body until generation finishes**. With `curl -s`, the terminal stays blank until then; on **CPU**, `max_tokens=120` with `both_reviews` can take **several minutes**—watch the API terminal for lines like `[inference_api] POST /v1/chat/completions …` or try a quick smoke test with `max_tokens` 8–16.
+
+On **Windows PowerShell**, `curl.exe -d $body` often **strips the opening `"` after `{`**, producing invalid JSON (`{model":...`). Pipe the same here-string through **`scripts/post_chat_completion.py`** instead:
+
+```powershell
+@'
+{"model":"nano-llm-local","messages":[{"role":"user","content":"<bos>GENERATE an IMDB-like review: [REVIEW] "}],"both_reviews":true,"max_tokens":16,"top_p":0.9}
+'@ | python scripts/post_chat_completion.py
+```
+
+Alternative: write **UTF-8 without BOM** to a temp file, then  
+`curl.exe ... --data-binary "@$env:TEMP\tarnet.json"`. In **cmd.exe**, `curl.exe --%` stops PowerShell from rewriting the rest of the line.
+
 **Safety note.** This project does not include safety guardrails at model level. Generated outputs may still be inappropriate; as a minimal safeguard, decoded text is post-processed to redact a small set of explicit terms by default (see [`content_filter.py`](src/nano_llm/inference/content_filter.py)). Use `--no-censor` on `scripts/generate.py` or `scripts/chat.py` to print raw decoded output.
 
 ## How training works

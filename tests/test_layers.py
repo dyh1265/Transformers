@@ -55,21 +55,21 @@ def test_rope_deterministic() -> None:
 def test_causal_attention_shape() -> None:
     attn = CausalSelfAttention(d_model=64, num_heads=4)
     x = torch.randn(2, 16, 64)
-    out = attn(x)
+    out, _ = attn(x)
     assert out.shape == (2, 16, 64)
 
 
 def test_decoder_block_shape() -> None:
     block = DecoderBlock(d_model=64, num_heads=4, d_ff=256)
     x = torch.randn(2, 16, 64)
-    out = block(x)
+    out, _ = block(x)
     assert out.shape == (2, 16, 64)
 
 
 def test_decoder_block_gradient_flows() -> None:
     block = DecoderBlock(d_model=32, num_heads=2, d_ff=128)
     x = torch.randn(1, 8, 32, requires_grad=True)
-    out = block(x)
+    out, _ = block(x)
     loss = out.sum()
     loss.backward()
     assert x.grad is not None
